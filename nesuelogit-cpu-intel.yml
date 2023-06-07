@@ -9,5 +9,5 @@ dependencies:
   - statsmodels
   - pip:
     - git+https://github.com/pabloguarda/pesuelogit.git@conda-dependency
-    - tensorflow #== 2.9 #2.10.0
+    - tensorflow == 2.12.0 #== 2.9 #2.10.0
     #- protobuf==3.20.*
