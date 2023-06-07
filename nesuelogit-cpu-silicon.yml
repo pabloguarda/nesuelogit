@@ -1,4 +1,4 @@
-name: nesuelogit-cpu
+name: nesuelogit-cpu-silicon
 channels:
   - apple
   - conda-forge
@@ -9,5 +9,5 @@ dependencies:
   - tensorflow-deps == 2.10
   - statsmodels
   - pip:
-    - git+https://github.com/pabloguarda/pesuelogit.git@apple-silicon
+    - git+https://github.com/pabloguarda/pesuelogit.git@conda-dependency
     - tensorflow-macos == 2.9 #2.10.0
