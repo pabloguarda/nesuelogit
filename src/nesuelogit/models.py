@@ -2034,10 +2034,10 @@ class NESUELOGIT(PESUELOGIT):
         if equilibrium_stage:
             total_epochs += epochs['equilibrium']
 
-        stage = 'equilibrium'
+        current_stage = 'equilibrium'
 
         if epochs['learning']>0:
-            stage = 'learning'
+            current_stage = 'learning'
 
         # Print benchmark based on mean reported in training data
         if Y_val is not None:
@@ -2090,7 +2090,7 @@ class NESUELOGIT(PESUELOGIT):
                 print(f"\nEquilibrium stage: {epochs['equilibrium']} epochs")
                 stage = 'equilibrium'
 
-            if (epoch == total_epochs) or (abs(relative_gaps[-1]) < threshold_relative_gap and stage == 'equilibrium'):
+            if (epoch == total_epochs) or (abs(relative_gaps[-1]) < threshold_relative_gap and current_stage == 'equilibrium'):
                 convergence = True
 
             if epoch == 0 and epochs['learning'] > 0:
@@ -2164,47 +2164,6 @@ class NESUELOGIT(PESUELOGIT):
                 # Normalize weights to one
                 loss_weights = {k: (v / np.sum(list(loss_weights.values()))) for k, v in loss_weights.items()}
 
-                # Equilibrium component
-                if alternating_optimization or (epoch >= epochs['learning'] and equilibrium_stage):
-
-                    loss_weights_equilibrium = dict(zip(loss_weights.keys(), [0] * len(loss_weights.keys())))
-                    loss_weights_equilibrium['equilibrium'] = 1
-
-                    iterations = 1
-
-                    if not equilibrium_stage:
-                        # loss_weights_equilibrium = loss_weights # This is like coordinate descent
-                        iterations = epochs['equilibrium']
-
-                    for i in range(iterations):
-                        trainable_variables = [j for j in self.trainable_variables if j.name.split(':')[0] == 'flows']
-
-                        assert len(trainable_variables) == 1
-
-                        # if alternating_optimization:
-                        #
-                        #     with tf.GradientTape() as tape:
-                        #         train_loss = \
-                        #             self.loss_function(X=X_train, Y=Y_train,
-                        #                                lambdas=loss_weights_equilibrium,
-                        #                                loss_metric=loss_metric)['loss_total']
-                        #
-                        #     grads = tape.gradient(train_loss, trainable_variables)
-                        #
-                        #     optimizers['equilibrium'].apply_gradients(zip(grads, trainable_variables))
-                        #
-                        # else:
-
-                        for step, (X_batch_train, Y_batch_train) in enumerate(train_dataset):
-                            with tf.GradientTape() as tape:
-                                train_loss = self.loss_function(X=X_batch_train, Y=Y_batch_train,
-                                                                lambdas=loss_weights_equilibrium,
-                                                                loss_metric=loss_metric)['loss_total']
-
-                            grads = tape.gradient(train_loss, trainable_variables)
-
-                            optimizers['equilibrium'].apply_gradients(zip(grads, trainable_variables))
-
                 if epoch < epochs['learning']:
                     # Learning part
 
@@ -2221,6 +2180,50 @@ class NESUELOGIT(PESUELOGIT):
                         grads = tape.gradient(train_loss, trainable_variables)
 
                         optimizers['learning'].apply_gradients(zip(grads, trainable_variables))
+
+                if alternating_optimization or (epoch >= epochs['learning'] and equilibrium_stage):
+
+                    loss_weights_equilibrium = loss_weights.copy()
+
+                    if current_stage == 'equilibrium':
+                        iterations = epochs['equilibrium']
+                        loss_weights_equilibrium = dict(
+                            zip(loss_weights.keys(), [0] * len(loss_weights.keys())))
+                        loss_weights_equilibrium['equilibrium'] = 1
+
+                    elif current_stage == 'learning' and alternating_optimization:
+                        # loss_weights_equilibrium = loss_weights.copy() # This is like coordinate descent
+                        iterations = 1
+
+                    # for i in range(iterations):
+                    trainable_variables = [j for j in self.trainable_variables if
+                                           j.name.split(':')[0] == 'flows']
+
+                    assert len(trainable_variables) == 1
+
+                    # if alternating_optimization:
+                    #
+                    #     with tf.GradientTape() as tape:
+                    #         train_loss = \
+                    #             self.loss_function(X=X_train, Y=Y_train,
+                    #                                lambdas=loss_weights_equilibrium,
+                    #                                loss_metric=loss_metric)['loss_total']
+                    #
+                    #     grads = tape.gradient(train_loss, trainable_variables)
+                    #
+                    #     optimizers['equilibrium'].apply_gradients(zip(grads, trainable_variables))
+                    #
+                    # else:
+
+                    for step, (X_batch_train, Y_batch_train) in enumerate(train_dataset):
+                        with tf.GradientTape() as tape:
+                            train_loss = self.loss_function(X=X_batch_train, Y=Y_batch_train,
+                                                            lambdas=loss_weights_equilibrium,
+                                                            loss_metric=loss_metric)['loss_total']
+
+                        grads = tape.gradient(train_loss, trainable_variables)
+
+                        optimizers['equilibrium'].apply_gradients(zip(grads, trainable_variables))
 
                 # Store losses and estimates
                 train_loss = self.loss_function(X=X_train, Y=Y_train, lambdas=loss_weights, loss_metric=mse,
