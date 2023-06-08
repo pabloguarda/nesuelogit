@@ -2088,7 +2088,7 @@ class NESUELOGIT(PESUELOGIT):
             if (equilibrium_stage and (epoch == (epochs['learning'] + 1)) and epochs['learning'] != 0) \
                     or (epochs['learning'] == 0 and epoch == 0):
                 print(f"\nEquilibrium stage: {epochs['equilibrium']} epochs")
-                stage = 'equilibrium'
+                current_stage = 'equilibrium'
 
             if (epoch == total_epochs) or (abs(relative_gaps[-1]) < threshold_relative_gap and current_stage == 'equilibrium'):
                 convergence = True
