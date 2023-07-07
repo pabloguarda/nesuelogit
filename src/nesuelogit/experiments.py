@@ -5,6 +5,8 @@ from typing import Dict, List, Tuple
 from nesuelogit.models import NESUELOGIT
 from nesuelogit.metrics import zscore, nmse
 
+from isuelogit.printer import block_output
+
 def simulate_features(n_days, time_variation = False, **kwargs) -> pd.DataFrame:
     """
     
@@ -63,7 +65,7 @@ def simulate_nesuelogit_data(model: NESUELOGIT,
                               loss_metric= loss_metric,
                               optimizer= optimizer,
                               batch_size=batch_size,
-                              loss_weights={'eq_flow': 1},
+                              loss_weights={'equilibrium': 1},
                               threshold_relative_gap= threshold_relative_gap,
                               # epochs_print_interval= _EPOCHS_PRINT_INTERVAL,
                               epochs=max_epochs)
@@ -71,15 +73,16 @@ def simulate_nesuelogit_data(model: NESUELOGIT,
     for var in optimizer.variables():
         var.assign(tf.zeros_like(var))
 
-    Y_pred = model.predict(tf.cast(X, dtype = model.dtype),
-                           period_dict={k: v for k, v in model.period_dict.items()},
-                           loss_metric= loss_metric,
-                           optimizer= optimizer,
-                           batch_size=batch_size,
-                           loss_weights={'eq_flow': 1},
-                           threshold_relative_gap=threshold_relative_gap,  # _RELATIVE_GAP,
-                           # epochs_print_interval=_EPOCHS_PRINT_INTERVAL,
-                           epochs=max_epochs)
+    with block_output(show_stdout=False, show_stderr=False):
+        Y_pred = model.predict(tf.cast(X, dtype = model.dtype),
+                               period_dict={k: v for k, v in model.period_dict.items()},
+                               loss_metric= loss_metric,
+                               optimizer= optimizer,
+                               batch_size=batch_size,
+                               loss_weights={'equilibrium': 1},
+                               threshold_relative_gap=threshold_relative_gap,  # _RELATIVE_GAP,
+                               # epochs_print_interval=_EPOCHS_PRINT_INTERVAL,
+                               epochs=max_epochs)
 
     traveltimes, link_flows = tf.unstack(Y_pred, axis = -1)
 

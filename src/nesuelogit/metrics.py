@@ -1,6 +1,6 @@
 import tensorflow as tf
 import numpy as np
-from sklearn.metrics import r2_score
+import sklearn.metrics as metrics
 
 def error(actual: tf.constant, predicted: tf.constant, mask = None):
     # return tf.boolean_mask(predicted - actual, tf.math.is_finite(predicted - actual))
@@ -44,7 +44,7 @@ def mape(actual: tf.constant, predicted: tf.constant, weight = 1):
 
     return 100*weight*tf.reduce_mean(tf.abs(error(actual, predicted, mask = mask))/tf.boolean_mask(actual, mask))
 
-def r2(actual: tf.constant, predicted: tf.constant, weight = 1):
+def r2_score(actual: tf.constant, predicted: tf.constant, weight = 1):
     # if weight == 0:
     #     return tf.constant(0, tf.float32)
 
@@ -53,8 +53,8 @@ def r2(actual: tf.constant, predicted: tf.constant, weight = 1):
     # if predicted.shape[0] < actual.shape[0]:
     #     predicted = tf.repeat(predicted, actual.shape[0], axis = 0)
 
-    return weight*r2_score(y_true = tf.boolean_mask(actual, mask),
-                           y_pred = tf.boolean_mask(predicted, mask))
+    return weight*metrics.r2_score(y_true = tf.boolean_mask(actual, mask),
+                                           y_pred = tf.boolean_mask(predicted, mask))
 
 
 def rmse(actual: tf.constant, predicted: tf.constant, weight = 1):

@@ -46,7 +46,7 @@ from nesuelogit.models import NESUELOGIT, ODParameters, UtilityParameters, BPR, 
     create_inference_model, PolynomialLayer
 from nesuelogit.visualizations import  plot_predictive_performance, plot_metrics_kfold, plot_top_od_flows_periods, \
     plot_utility_parameters_periods, plot_rr_by_period, plot_rr_by_period_models, plot_total_trips_models
-from nesuelogit.metrics import mse, btcg_mse, mnrmse, mape, nrmse, r2, zscore
+from nesuelogit.metrics import mse, btcg_mse, mnrmse, mape, nrmse, r2_score, zscore
 
 # Seed for reproducibility
 _SEED = 2023
@@ -76,6 +76,8 @@ read_OD(network=fresno_network, sparse=True)
 # For quick testing (do not need to read_paths before)
 Q = fresno_network.load_OD(sparsify_OD(fresno_network.Q, prop_od_pairs=0.99))
 load_k_shortest_paths(network=fresno_network, k=2, update_incidence_matrices=True)
+
+q_historic = np.repeat(fresno_network.q.flatten()[np.newaxis, :], 6, axis=0)
 
 ## Read spatiotemporal data
 folderpath = isl.config.dirs['read_network_data'] + 'links/spatiotemporal-data/'
@@ -259,16 +261,16 @@ _FIXED_EFFECT = False
 # _LOSS_METRIC  = nrmse
 _LOSS_METRIC  = zscore
 
-# _LOSS_WEIGHTS ={'od': 0, 'traveltime': 1, 'flow': 1, 'eq_flow': 3, 'prop_od': 0, 'ntrips': 0}
+# _LOSS_WEIGHTS ={'od': 0, 'traveltime': 1, 'flow': 1, 'equilibrium': 3, 'prop_od': 0, 'ntrips': 0}
 # _MOMENTUM_EQUILIBRIUM = 0.99
 _MOMENTUM_EQUILIBRIUM = 1
 
 # Including historic OD matrix
-# _LOSS_WEIGHTS ={'od': 1, 'traveltime': 1, 'flow': 1, 'eq_flow': 1}
+# _LOSS_WEIGHTS ={'od': 1, 'traveltime': 1, 'flow': 1, 'equilibrium': 1}
 # _MOMENTUM_EQUILIBRIUM = 0.99
 
 # _LOSS_METRIC = mse
-# _LOSS_WEIGHTS ={'od': 1, 'theta': 0, 'traveltime': 1e10, 'flow': 1, 'eq_flow': 1}
+# _LOSS_WEIGHTS ={'od': 1, 'theta': 0, 'traveltime': 1e10, 'flow': 1, 'equilibrium': 1}
 
 #_LOSS_METRIC  = btcg_mse
 #_LOSS_METRIC  = mnrmse
@@ -278,7 +280,7 @@ _MOMENTUM_EQUILIBRIUM = 1
 #       f"Learning rate: {_LR}, "
 #       f"Batch size: {_BATCH_SIZE}")
 
-_LOSS_WEIGHTS ={'od': 0, 'traveltime': 1, 'flow': 1, 'eq_flow': 4}
+_LOSS_WEIGHTS ={'od': 0, 'traveltime': 1, 'flow': 1, 'equilibrium': 4}
 _EQUILIBRIUM_STAGE = True
 _ALTERNATING_OPTIMIZATION = False
 
@@ -299,7 +301,7 @@ _EPOCHS_PRINT_INTERVAL = {'learning':1, 'equilibrium':1}
 # _EPOCHS_PRINT_INTERVAL = {'learning':1, 'equilibrium':1}
 # _XTICKS_SPACING = 50
 
-# _LOSS_WEIGHTS ={'od': 0, 'traveltime': 1, 'flow': 1, 'eq_flow': 1e-1}
+# _LOSS_WEIGHTS ={'od': 0, 'traveltime': 1, 'flow': 1, 'equilibrium': 1e-1}
 # _EQUILIBRIUM_STAGE = False
 # _ALTERNATING_OPTIMIZATION = True
 # _LR = {'learning': 1e-1, 'equilibrium': 5e-1}
@@ -308,7 +310,7 @@ _EPOCHS_PRINT_INTERVAL = {'learning':1, 'equilibrium':1}
 # _EPOCHS_PRINT_INTERVAL = {'learning':1, 'equilibrium':2}
 # _XTICKS_SPACING = 5
 
-# _LOSS_WEIGHTS ={'od': 0, 'traveltime': 1, 'flow': 1, 'eq_flow': 4}
+# _LOSS_WEIGHTS ={'od': 0, 'traveltime': 1, 'flow': 1, 'equilibrium': 4}
 # _EQUILIBRIUM_STAGE = False
 # _ALTERNATING_OPTIMIZATION = False
 # _LR = {'learning': 1e-1, 'equilibrium': 1e-1}
@@ -387,74 +389,77 @@ def create_bpr(network, dtype =_DTYPE):
                )
 
 
-def create_tvodlulpe_model_fresno(network, dtype = _DTYPE, n_periods=1, features_Z = _FEATURES_Z, historic_g = None,
-                                  performance_function = None):
+def create_tvgodlulpe_model_fresno(network, dtype=_DTYPE, n_periods=1, features_Z=_FEATURES_Z, historic_g=None,
+                                      performance_function=None, utility_parameters = None, od_parameters = None,
+                                      generation_parameters = None, generation = True, od_trainable = False,
+                                      utility_trainable = True, pretrain_generation_weights = True, generation_trainable = True):
 
-    utility_parameters = UtilityParameters(features_Y=['traveltime'],
-                                           features_Z= features_Z,
-                                           # initial_values={
-                                           #                 'traveltime': -10,
-                                           #                 'tt_sd': -10, 'median_inc': 1,
-                                           #                 'incidents': -1, 'bus_stops': -1, 'intersections': -1,
-                                           #                 'psc_factor': 0,
-                                           #                 'fixed_effect': np.zeros_like(network.links)},
-                                           initial_values={
-                                               'traveltime': -3.0597,
-                                               'tt_sd': -3.2678, 'median_inc': 0,
-                                               'incidents': -4.5368, 'bus_stops': 0, 'intersections': -3.8788,
-                                               'psc_factor': 0,
-                                               'fixed_effect': np.zeros_like(network.links)},
+    if utility_parameters is None:
+        utility_parameters = UtilityParameters(features_Y=['tt'],
+                                               features_Z=features_Z,
+                                               # initial_values={
+                                               #                 'tt': -10,
+                                               #                 'tt_sd': -10, 'median_inc': 1,
+                                               #                 'incidents': -1, 'bus_stops': -1, 'intersections': -1,
+                                               #                 'psc_factor': 0,
+                                               #                 'fixed_effect': np.zeros_like(network.links)},
+                                               initial_values={
+                                                   'tt': -3.0597,
+                                                   'tt_sd': -3.2678, 'median_inc': 0,
+                                                   'incidents': -4.5368, 'bus_stops': 0, 'intersections': -3.8788,
+                                                   'psc_factor': 0,
+                                                   'fixed_effect': np.zeros_like(network.links)},
 
-                                           signs={'traveltime': '-', 'tt_sd': '-', 'median_inc': '+', 'incidents': '-',
-                                                  'bus_stops': '-', 'intersections': '-'},
-                                           trainables={'psc_factor': False, 'fixed_effect': True,
-                                                       'traveltime': True, 'tt_sd': True, 'median_inc': True,
-                                                       'incidents': True,
-                                                       'bus_stops': True, 'intersections': True
-                                                       },
-                                           time_varying=True,
-                                           dtype=dtype
-                                           )
+                                               signs={'tt': '-', 'tt_sd': '-', 'median_inc': '+', 'incidents': '-',
+                                                      'bus_stops': '-', 'intersections': '-'},
+                                               trainables={'psc_factor': False, 'fixed_effect': utility_trainable,
+                                                           'tt': utility_trainable, 'tt_sd': True, 'median_inc': True,
+                                                           'incidents': True,
+                                                           'bus_stops': True, 'intersections': True
+                                                           },
+                                               time_varying=True,
+                                               dtype=dtype
+                                               )
 
     if performance_function is None:
         # performance_function = create_bpr(network = network, dtype = dtype)
-        performance_function = create_mlp(network=network, dtype=dtype)
+        performance_function = create_mlp(network = network, dtype = dtype)
 
+    if generation_parameters is None and generation:
+        generation_parameters = GenerationParameters(
+            features_Z=['population', 'income', 'bus_stops'],
+            keys=['fixed_effect_od', 'fixed_effect_origin', 'fixed_effect_destination'],
+            initial_values={'income': 0, 'population': 0, 'bus_stops': 0,
+                            'fixed_effect': historic_g[0]
+                            # 'fixed_effect': od_parameters.compute_generated_trips()
+                            },
+            signs={'income': '+', 'population': '+', 'bus_stops': '-'},
+            trainables={'fixed_effect': generation_trainable, 'income': True, 'population': True, 'bus_stops': True,
+                        'fixed_effect_origin': False, 'fixed_effect_destination': False, 'fixed_effect_od': generation_trainable
+                        # 'fixed_effect_origin': False, 'fixed_effect_destination': generation_trainable, 'fixed_effect_od': False
+                        },
+            # trainables={'fixed_effect': True, 'income': True, 'population': True, 'bus_stops': True},
+            # trainables={'fixed_effect': False, 'income': False, 'population': False, 'bus_stops': False},
+            time_varying=True,
+            # historic_g = od_parameters.compute_generated_trips(),
+            historic_g= historic_g,
+            pretrain_generation_weights=pretrain_generation_weights,
+            dtype=dtype
+        )
 
-    od_parameters = ODParameters(key='od',
-                                 initial_values=network.q.flatten(),
-                                 # historic_values={10: network.q.flatten()},
-                                 # total_trips={0: 1e5, 1: 1e5, 2: 1e5, 9: 1e5, 10: 1e5, 11: 1e5},
-                                 ods=network.ods,
-                                 n_periods=n_periods,
-                                 time_varying=True,
-                                 trainable=True,
-                                 )
-
-    # TODO: Add option to pretrain weights
-    generation_parameters = GenerationParameters(
-        features_Z=['population', 'income', 'bus_stops'],
-        keys=['fixed_effect_od', 'fixed_effect_origin', 'fixed_effect_destination'],
-        # initial_values={'income': 1e2, 'population': 1e2, 'bus_stops': -1e2 ,
-        #                 # 'fixed_effect': od_parameters.compute_generated_trips()*generation_factors
-        #                 # 'fixed_effect': od_parameters.compute_generated_trips()
-        #                 },
-        signs={'income': '+', 'population': '+', 'bus_stops': '-'},
-        trainables={'fixed_effect': True, 'income': True, 'population': True, 'bus_stops': True,
-                    'fixed_effect_origin': False, 'fixed_effect_destination': False, 'fixed_effect_od': True
-                    # 'fixed_effect_origin': False, 'fixed_effect_destination': True, 'fixed_effect_od': False
-                    },
-        # trainables={'fixed_effect': True, 'income': True, 'population': True, 'bus_stops': True},
-        # trainables={'fixed_effect': False, 'income': False, 'population': False, 'bus_stops': False},
-        time_varying=True,
-        # historic_g = od_parameters.compute_generated_trips(),
-        historic_g= historic_g,
-        pretrain_generation_weights=True,
-        dtype=dtype
-    )
+    if od_parameters is None:
+        od_parameters = ODParameters(key='od',
+                                     initial_values= q_historic,
+                                     historic_values={10: network.q.flatten()},
+                                     # total_trips={0: 1e5, 1: 1e5, 2: 1e5, 9: 1e5, 10: 1e5, 11: 1e5},
+                                     ods=network.ods,
+                                     n_periods=n_periods,
+                                     time_varying=True,
+                                     trainable= od_trainable,
+                                     )
 
     model = NESUELOGIT(
-        key='tvodlulpe',
+        key='tvgodlulpe',
         network=network,
         dtype=dtype,
         utility=utility_parameters,
@@ -543,8 +548,9 @@ if run_model['equilibrium']:
         # generalization_error={'train': False, 'validation': True},
         optimizers=_OPTIMIZERS,
         batch_size=_BATCH_SIZE,
-        loss_weights={'od': 0, 'theta': 0, 'traveltime': 0, 'flow': 0, 'eq_flow': 1},
+        loss_weights={'od': 0, 'theta': 0, 'traveltime': 0, 'flow': 0, 'equilibrium': 1},
         momentum_equilibrium=_MOMENTUM_EQUILIBRIUM,
+        pretrain_link_flows = True,
         threshold_relative_gap=_RELATIVE_GAP,
         epochs=_EPOCHS)
 
@@ -690,9 +696,10 @@ if run_model['odlulpe']:
         optimizers=_OPTIMIZERS,
         # generalization_error={'train': False, 'validation': True},
         batch_size=_BATCH_SIZE,
-        # loss_weights={'od': 1, 'theta': 0, 'traveltime': 1, 'flow': 1, 'eq_flow': 1},
+        # loss_weights={'od': 1, 'theta': 0, 'traveltime': 1, 'flow': 1, 'equilibrium': 1},
         loss_weights= _LOSS_WEIGHTS,
         momentum_equilibrium=_MOMENTUM_EQUILIBRIUM,
+        pretrain_link_flows=True,
         equilibrium_stage=_EQUILIBRIUM_STAGE,
         alternating_optimization=_ALTERNATING_OPTIMIZATION,
         threshold_relative_gap=_RELATIVE_GAP,
@@ -756,11 +763,11 @@ if run_model['odlulpe']:
     print(f"Avg abs diff of observed and estimated OD: {np.mean(np.abs(models['odlulpe'].q - fresno_network.q.flatten())): 0.2f}")
     print(f"Avg observed OD: {np.mean(np.abs(fresno_network.q.flatten())): 0.2f}")
 
-    metrics_df = models['odlulpe'].compute_loss_metrics(metrics = {'mape': mape, 'mse': mse, 'r2': r2},
-                                                                X = X_train, Y = Y_train).assign(dataset = 'training')
+    metrics_df = models['odlulpe'].compute_loss_metrics(metrics = {'mape': mape, 'mse': mse, 'r2': r2_score},
+                                                        X = X_train, Y = Y_train).assign(dataset = 'training')
     metrics_df = pd.concat([metrics_df,
-                            models['odlulpe'].compute_loss_metrics(metrics={'mape': mape, 'mse': mse, 'r2': r2},
-                                                                     X=X_val, Y = Y_val).assign(dataset = 'validation')])
+                            models['odlulpe'].compute_loss_metrics(metrics={'mape': mape, 'mse': mse, 'r2': r2_score},
+                                                                   X=X_val, Y = Y_val).assign(dataset = 'validation')])
 
     with pd.option_context('display.float_format', '{:0.3g}'.format):
         print(pd.pivot(metrics_df, index = ['component', 'dataset'], columns = ['metric'])['value'])
@@ -785,7 +792,7 @@ if run_model['tvodlulpe']:
 
     generated_trips = compute_generated_trips(q = fresno_network.q.flatten()[np.newaxis,:], ods= fresno_network.ods)
 
-    models['tvodlulpe'], _ = create_tvodlulpe_model_fresno(
+    models['tvodlulpe'], _ = create_tvgodlulpe_model_fresno(
         n_periods = n_periods, network = fresno_network, historic_g= generated_trips * generation_factors.values[:, np.newaxis])
 
     train_results_dfs['tvodlulpe'], val_results_dfs['tvodlulpe'] = models['tvodlulpe'].fit(
@@ -798,6 +805,7 @@ if run_model['tvodlulpe']:
         loss_metric=_LOSS_METRIC,
         equilibrium_stage=_EQUILIBRIUM_STAGE,
         momentum_equilibrium=_MOMENTUM_EQUILIBRIUM,
+        pretrain_link_flows=True,
         alternating_optimization=_ALTERNATING_OPTIMIZATION,
         threshold_relative_gap=_RELATIVE_GAP,
         epochs_print_interval=_EPOCHS_PRINT_INTERVAL,
@@ -884,10 +892,10 @@ if run_model['tvodlulpe']:
 
     print(f"Avg observed OD: {np.mean(np.abs(fresno_network.q.flatten())): 0.2f}")
 
-    metrics_df = models['tvodlulpe'].compute_loss_metrics(metrics={'mape': mape, 'mse': mse, 'r2': r2},
+    metrics_df = models['tvodlulpe'].compute_loss_metrics(metrics={'mape': mape, 'mse': mse, 'r2': r2_score},
                                                           X=XT_val, Y=YT_val).assign(dataset='validation')
     metrics_df = pd.concat([metrics_df,
-                            models['tvodlulpe'].compute_loss_metrics(metrics={'mape': mape, 'mse': mse, 'r2': r2},
+                            models['tvodlulpe'].compute_loss_metrics(metrics={'mape': mape, 'mse': mse, 'r2': r2_score},
                                                                      X=XT_train, Y=YT_train).assign(dataset='training')])
 
     with pd.option_context('display.float_format', '{:0.3g}'.format):
@@ -903,11 +911,11 @@ if run_model['tvodlulpe-kfold']:
 
     generated_trips = compute_generated_trips(q=fresno_network.q.flatten()[np.newaxis, :], ods=fresno_network.ods)
 
-    model, _ = create_tvodlulpe_model_fresno(
+    model, _ = create_tvgodlulpe_model_fresno(
         n_periods=n_periods, network=fresno_network,
         historic_g=generation_factors.values[:, np.newaxis] * generated_trips)
 
-    metrics_kfold_df = train_kfold(
+    metrics_kfold_df, parameters_kfold_df = train_kfold(
         n_splits=10,
         random_state = _SEED,
         model = model,
@@ -951,7 +959,7 @@ if run_model['tvodlulpe-outofsample']:
 
     generated_trips = compute_generated_trips(q = fresno_network.q.flatten()[np.newaxis,:], ods= fresno_network.ods)
 
-    reference_model, _ = create_tvodlulpe_model_fresno(
+    reference_model, _ = create_tvgodlulpe_model_fresno(
         n_periods=n_periods, network=fresno_network, historic_g=generation_factors.values[:, np.newaxis] * generated_trips)
 
     reference_model.build()
@@ -964,7 +972,7 @@ if run_model['tvodlulpe-outofsample']:
     reference_model.load_weights('output/models/230525123416_tvodlulpe_fresno.h5')
 
     # Create model for inference
-    model = create_inference_model(creation_method = create_tvodlulpe_model_fresno, reference_model=reference_model)
+    model = create_inference_model(creation_method = create_tvgodlulpe_model_fresno, reference_model=reference_model)
 
     model.weights
 
@@ -981,6 +989,7 @@ if run_model['tvodlulpe-outofsample']:
         loss_metric=_LOSS_METRIC,
         equilibrium_stage=_EQUILIBRIUM_STAGE,
         momentum_equilibrium=_MOMENTUM_EQUILIBRIUM,
+        pretrain_link_flows=True,
         threshold_relative_gap=_RELATIVE_GAP,
         epochs_print_interval=_EPOCHS_PRINT_INTERVAL,
         # epochs=_EPOCHS
@@ -995,14 +1004,14 @@ if run_model['tvodlulpe-outofsample']:
                             loss_metric=_LOSS_METRIC,
                             optimizer=_OPTIMIZERS['equilibrium'],
                             batch_size= 1,
-                            loss_weights={'eq_flow': 1},
+                            loss_weights={'equilibrium': 1},
                             threshold_relative_gap=1e-2,  # _RELATIVE_GAP,
                             epochs_print_interval=_EPOCHS_PRINT_INTERVAL,
                             epochs=30)
 
     with pd.option_context('display.float_format', '{:0.3g}'.format):
         print('\n')
-        training_metrics = reference_model.compute_loss_metrics(metrics={'mape': mape, 'mse': mse, 'r2': r2},
+        training_metrics = reference_model.compute_loss_metrics(metrics={'mape': mape, 'mse': mse, 'r2': r2_score},
                                                                 X=XT_train, Y=YT_train)
 
         print(training_metrics)
@@ -1014,13 +1023,13 @@ if run_model['tvodlulpe-outofsample']:
                   loss_metric=_LOSS_METRIC,
                   optimizer=_OPTIMIZERS['equilibrium'],
                   batch_size= 1,
-                  loss_weights={'eq_flow': 1},
+                  loss_weights={'equilibrium': 1},
                   threshold_relative_gap=1e-2,  # _RELATIVE_GAP,
                   epochs_print_interval=_EPOCHS_PRINT_INTERVAL,
                   epochs=100)
 
     with pd.option_context('display.float_format', '{:0.3g}'.format):
-        validation_metrics = model.compute_loss_metrics(metrics = {'mape': mape, 'mse': mse, 'r2': r2}, X = XT_val, Y = YT_val)
+        validation_metrics = model.compute_loss_metrics(metrics = {'mape': mape, 'mse': mse, 'r2': r2_score}, X = XT_val, Y = YT_val)
         print(validation_metrics)
 
     with pd.option_context('display.float_format', '{:0.3g}'.format):
@@ -1029,7 +1038,7 @@ if run_model['tvodlulpe-outofsample']:
         print(pd.pivot(metrics_df, index=['component', 'dataset'], columns=['metric'])['value'])
 
     # Bad model because it will make a prediction without training parameters
-    other_model = create_tvodlulpe_model_fresno(
+    other_model = create_tvgodlulpe_model_fresno(
         historic_g=generated_trips * generation_factors.values[:, np.newaxis], network = fresno_network)[0]
 
     other_model.build()
@@ -1037,7 +1046,7 @@ if run_model['tvodlulpe-outofsample']:
 
     # other_model.forward(X)
     with pd.option_context('display.float_format', '{:0.3g}'.format):
-        print(other_model.compute_loss_metrics(metrics={'mape': mape, 'mse': mse, 'r2': r2}, X=XT_val, Y=YT_val))
+        print(other_model.compute_loss_metrics(metrics={'mape': mape, 'mse': mse, 'r2': r2_score}, X=XT_val, Y=YT_val))
 
     # TODO: Add benchmark model here
 
@@ -1101,7 +1110,7 @@ print(results.pivot_table(index = ['parameter'], columns = 'model', values = 'va
 # Summary of models goodness of fit
 
 results_losses = pd.DataFrame({})
-loss_columns = ['loss_flow', 'loss_tt', 'loss_eq_flow', 'loss_total']
+loss_columns = ['loss_flow', 'loss_tt', 'loss_equilibrium', 'loss_total']
 
 for i, model in models.items():
 

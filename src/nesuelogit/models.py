@@ -12,7 +12,7 @@ import os
 from typing import Dict, List, Tuple, Union
 
 import pesuelogit
-from nesuelogit.metrics import error, mse, sse, rmse, nrmse, nmse, btcg_mse, mnrmse, l1norm, mape, r2, zscore, z2score
+from nesuelogit.metrics import error, mse, sse, rmse, nrmse, nmse, btcg_mse, mnrmse, l1norm, mape, r2_score, zscore, z2score
 from nesuelogit.utils import timeit
 from pesuelogit.models import PESUELOGIT, normalize_od, compute_rr
 
@@ -53,7 +53,6 @@ def mask_Y(Y, k, tt_ff, D):
     observed_flow =mask_observed_flow(observed_flow, D = D)
 
     return tf.stack([observed_traveltime, observed_flow], axis=2)
-
 
 def get_period_ids(period_column: np.array, period_dict=None):
     """
@@ -103,6 +102,36 @@ def normalized_losses(losses: pd.DataFrame) -> pd.DataFrame:
     losses[columns] = losses[columns] / losses[losses['epoch'] == losses['epoch'].min()][columns].values
 
     return losses
+
+def utility_parameters_periods(model, period_feature, period_keys, include_vot=False):
+    theta_df = pd.DataFrame({})
+
+    period_dict = {v: k for k, v in model.period_dict.items()}
+
+    for i in range(model.theta.shape[0]):
+        theta_dict = dict(zip(model.utility.features, list(model.theta[i].numpy())))
+
+        if include_vot:
+            theta_dict['vot'] = float(compute_rr(theta_dict))
+
+        label_period_feature_1 = int(period_keys[period_keys.period_id == period_dict[i]][period_feature].iloc[0])
+        label_period_feature_2 = label_period_feature_1 + 1
+
+        label_period_feature = f"{label_period_feature_1}-{label_period_feature_2}"
+
+        theta_dict[period_feature] = label_period_feature_1
+
+        theta_df = pd.concat([theta_df, pd.DataFrame(theta_dict, index=[label_period_feature])])
+
+    if include_vot:
+        theta_df[theta_df['vot'].isna()] = 0
+
+    theta_df = theta_df.sort_values(period_feature)
+
+    cols = theta_df.columns
+    theta_df[cols] = theta_df[cols].apply(pd.to_numeric, errors='coerce')
+
+    return theta_df
 
 
 class Parameters(pesuelogit.models.Parameters):
@@ -199,6 +228,25 @@ class ODParameters(pesuelogit.models.ODParameters):
         self._features_distribution = features_distribution
 
     @property
+    def  historic_values_array(self):
+        # historic_od = tf.expand_dims(tf.constant(self.network.q.flatten()), axis=0)
+        # if len(list(self.historic_values.keys())) > 1:
+
+        if isinstance(self.historic_values, dict) and self.historic_values is not None:
+            # historic_od = np.empty((self.n_periods, list(self.historic_values.values())[0].shape[0]))
+            historic_od = np.empty(self.initial_value.shape)
+            historic_od[:] = np.nan
+
+            for period, od in self.historic_values.items():
+                historic_od[period, :] = od
+
+            return historic_od
+        # return self._historic_values
+
+        else:
+            return self.historic_values
+
+    @property
     def features_generation(self):
         return self._features_generation
 
@@ -283,10 +331,11 @@ class ODParameters(pesuelogit.models.ODParameters):
 
 class PerformanceFunction(tf.keras.layers.Layer):
 
-    def __init__(self, type, *args, **kwargs):
+    def __init__(self, type, max_traveltime_factor = None, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
         self.type = type
+        self.max_traveltime_factor = max_traveltime_factor
 
     # @abstractmethod
     # def call(self, **kwargs):
@@ -315,6 +364,9 @@ class KernelConstraint(tf.keras.constraints.Constraint):
                  diagonal: bool = False,
                  symmetric: bool = False,
                  homogenous: bool = False,
+                 initial_values = None,
+                 bounds_clipping: [float,float] = None,
+                 min_diagonal_value = 1e-8,
                  link_keys: List[Tuple[int, int]] = None,
                  dtype=tf.float32,
                  adjacency_constraint: bool = False):
@@ -327,11 +379,53 @@ class KernelConstraint(tf.keras.constraints.Constraint):
         self.n_links = len(capacities)
         self.link_keys = link_keys
         self.dtype = dtype
-        self.adjacency_constraint = tf.ones((self.n_links, self.n_links))
+        self.constraint_matrix = None
 
-        if adjacency_constraint:
-            self.adjacency_constraint \
+        if bounds_clipping is None:
+            bounds_clipping = [-10, 10]
+
+        # Clip all values of the matrix between bounds
+        self.bounds_clipping = bounds_clipping
+
+        assert self.bounds_clipping[0] < self.bounds_clipping[1], \
+            "first element in clipping must be lower than second element"
+
+        self.min_diagonal_value = min_diagonal_value
+
+        assert self.min_diagonal_value>=self.bounds_clipping[0] and  self.min_diagonal_value <=self.bounds_clipping[1], \
+            "Minimum value of diagonal must be between the bounds defined by bounds_clipping argument"
+
+        self.adjacency_constraint = adjacency_constraint
+
+        if self.adjacency_constraint:
+            self.adjacency_constraint_matrix \
                 = self.create_adjacency_constraint_matrix(link_keys=self.link_keys, dtype=self.dtype)
+
+        self.initial_values = initial_values
+
+        if self.initial_values is None:
+            # kernel_initializer = tf.constant_initializer(0)
+
+            # self.kernel_initializer = tf.constant_initializer(0.15 * np.eye(self.n_links))
+
+            # Initialize to one works the best
+            # self.kernel_initializer = tf.constant_initializer(1 * np.eye(n_links))
+
+            # self.kernel_constraint.initial_values = 1e-1*tf.ones((self.n_links,self.n_links), dtype = tf.float32)
+            # self.kernel_constraint.initial_values = tf.ones((self.n_links, self.n_links), dtype=tf.float32)
+            # Assign 0 as initial values of the adjacency constraint terms
+            self.initial_values = tf.ones((self.n_links,self.n_links), dtype=self.dtype)
+
+        self.constraint_matrix = tf.ones((self.n_links, self.n_links), dtype=self.dtype)
+
+        if self.adjacency_constraint:
+            self.constraint_matrix *= self.adjacency_constraint_matrix
+
+        if self.diagonal or self.homogenous:
+            self.constraint_matrix *= tf.eye(self.n_links)
+
+        self.initial_values *= self.constraint_matrix
+
 
     def create_adjacency_constraint_matrix(self, link_keys: List[Tuple], dtype=None):
 
@@ -356,51 +450,65 @@ class KernelConstraint(tf.keras.constraints.Constraint):
 
         return matrix
 
+
     def __call__(self, W):
         # return tf.linalg.diag_part(w)*tf.eye(w.shape[0])
         # return tf.clip_by_value(tf.linalg.diag_part(w) * tf.eye(w.shape[0]), clip_value_min=0, clip_value_max=1)
 
+        # Minimum value in the diagonal. Assumption: higher link flow, higher travel time -> kernel diagonal has non-negative elements
+        self.min_diagonal_element = self.min_diagonal_value
+
         if self.symmetric:
-            # Symmetric but with opposite signs
             W_upper = tf.compat.v1.matrix_band_part(W, 0, -1)
-            factor_interaction = 1  # -1
+            factor_interaction = 1  # with -1 Symmetric but with opposite signs
             W = 0.5 * (W_upper + factor_interaction * tf.transpose(W_upper))
+            # Note that the operation below will not affect the symmetry of the matrix
+
+        W = tf.clip_by_value(W,
+                         clip_value_min=self.bounds_clipping[0],
+                         # clip_value_min=0,
+                         clip_value_max=self.bounds_clipping[1]
+                         # clip_value_max=10
+                         )
 
         W_old_diagonal = tf.linalg.diag_part(W) * tf.eye(W.shape[0])
 
-        # Assumption: higher link flow, higher travel time -> kernel diagonal has non-negative elements
-        # TODO: define the minimum value for clipping
         # W_new_diagonal = tf.linalg.diag_part(W)* tf.eye(W.shape[0])
-        W_new_diagonal = tf.clip_by_value(W_old_diagonal,
-                                          clip_value_min=0,
-                                          clip_value_max=10
-                                          # clip_value_min=1e-4,
-                                          )
+        W_new_diagonal = tf.linalg.diag_part(tf.clip_by_value(W_old_diagonal,
+                                          clip_value_min= self.min_diagonal_element,
+                                          # clip_value_min=0,
+                                          clip_value_max= self.bounds_clipping[1],
+                                          # clip_value_max=10
 
-        self.W = W_new_diagonal
-
+                                          )) * tf.eye(W.shape[0])
         # if self.homogenous:
         #     # Only average over terms that are greater than zero.
         #     self.W = tf.cast(tf.where(self.W > 0, 1, 0), self.W.dtype) * tf.reduce_mean(self.W[self.W > 0])
 
         if self.diagonal:
+            self.W = W_new_diagonal
+
             return self.W
+        else:
+            W = (W - W_old_diagonal + W_new_diagonal)
 
-        # Only diagonal is restricted to be non-negative
+        if self.adjacency_constraint:
+            W *= self.adjacency_constraint_matrix
 
-        self.W = (W - W_old_diagonal + W_new_diagonal) * self.adjacency_constraint
+        self.W = W
 
         return self.W
 
 class PolynomialLayer(tf.keras.layers.Layer):
     def __init__(self,
                  dtype = tf.float32,
-                 poly_order = 2,
+                 poly_order = 1,
                  trainable = True,
                  pretrain_weights = False,
                  alpha_prior = 0.15,
                  beta_prior = 4,
                  kernel_constraint = None,
+                 link_specific = False,
                  alpha_relu = 0,
                  *args,
                  **kwargs
@@ -419,6 +527,11 @@ class PolynomialLayer(tf.keras.layers.Layer):
         self.beta_prior = beta_prior
         self.kernel_constraint = kernel_constraint
         self.alpha_relu = alpha_relu
+        self.link_specific = link_specific
+
+    @property
+    def poly_weights(self):
+        return tf.exp(self._poly_weights)
 
     def build(self, n_poly_features = None, n_links = None):
 
@@ -428,27 +541,48 @@ class PolynomialLayer(tf.keras.layers.Layer):
         if n_poly_features is None:
             n_poly_features = self.poly_order
 
-        self.model = tf.keras.models.Sequential([
-            tf.keras.Input(shape=(n_links, n_poly_features))])
+        rows = 1
+        if self.link_specific:
+            rows = n_links
 
-        self.model.add(tf.keras.layers.Dense(1,
-                                             name ='polynomial_kernel',
-                                             use_bias=False,
-                                             kernel_constraint = self.kernel_constraint
-                                             # bias_constraint = tf.keras.constraints.NonNeg(),
-                                             # kernel_initializer = tf.keras.initializers.Constant(1e-4)
-                                             # kernel_initializer=tf.keras.initializers.Constant(1/n_poly_features)
-                                             # kernel_initializer=tf.keras.initializers.Constant(0)
-                                             )
-                       )
+        # Normalize by the number of poly features to avoid the initial polynomial to blow up
+        # initial_value = np.log((1/n_poly_features)*np.ones((rows, n_poly_features), dtype = self.dtype))
+        initial_value = np.log(np.ones((rows, n_poly_features), dtype=self.dtype))
 
-        # Note that ReLU layer does not have any effect if the kernel constraint restricts the weights to be positive
-        # self.model.add(tf.keras.layers.ReLU())
-        self.model.add(tf.keras.layers.LeakyReLU(self.alpha_relu))
-        # self.model.add(tf.keras.layers.PReLU())
+        self._poly_weights = tf.Variable(
+            # self.bpr.parameters['alpha'].initial_value,
+            # initial_value=np.log(self.initial_values['alpha']),
+            initial_value= initial_value,
+            # np.sqrt(self.bpr.parameters['alpha'].initial_value),
+            trainable= self.trainable_layer,
+            name='poly_weights',
+            dtype=self.dtype)
+
+        # units = 1
+        # if self.link_specific:
+        #     units = n_links
+        #
+        # self.model = tf.keras.models.Sequential([
+        #     tf.keras.Input(shape=(n_links, n_poly_features))])
+        #
+        # self.model.add(tf.keras.layers.Dense(n_links,
+        #                                      name ='polynomial_kernel',
+        #                                      use_bias=False,
+        #                                      kernel_constraint = self.kernel_constraint
+        #                                      # bias_constraint = tf.keras.constraints.NonNeg(),
+        #                                      # kernel_initializer = tf.keras.initializers.Constant(1e-4)
+        #                                      # kernel_initializer=tf.keras.initializers.Constant(1/n_poly_features)
+        #                                      # kernel_initializer=tf.keras.initializers.Constant(0)
+        #                                      )
+        #                )
+        #
+        # # Note that ReLU layer does not have any effect if the kernel constraint restricts the weights to be positive
+        # # self.model.add(tf.keras.layers.ReLU())
+        # self.model.add(tf.keras.layers.LeakyReLU(self.alpha_relu))
+        # # self.model.add(tf.keras.layers.PReLU())
 
         self._built = True
-        self.model.trainable = self.trainable_layer
+        # self.model.trainable = self.trainable_layer
 
     def map_flows(self, flows, capacities):
 
@@ -463,14 +597,14 @@ class PolynomialLayer(tf.keras.layers.Layer):
         flows /= capacities
 
         flows = tf.cast(tf.concat([list(map(lambda x: self.poly.fit_transform(tf.transpose(x)),
-                                    tf.split(flows, flows.shape[0])))], axis =2), dtype = self.dtype)
+                                            tf.split(flows, flows.shape[0])))], axis =2), dtype = self.dtype)
 
         return flows
 
     def transform_flows(self, flows, capacities, period_ids, n_periods = None):
 
         flows = self.map_flows(flows = flows, capacities=capacities)
-        n_links =  len(capacities)
+        n_links = len(capacities)
 
         if not self._built:
             self.n_poly_features = flows.shape[-1]
@@ -479,8 +613,15 @@ class PolynomialLayer(tf.keras.layers.Layer):
 
         if n_periods is None:
             n_periods = self.n_periods
+        #
+        # if self.link_specific:
+        #     return tf.reduce_sum(flows,2)
 
-        flows = tf.reshape(self.model(flows), (n_periods, n_links))
+        # flows = tf.reshape(self.model(flows), (n_periods, n_links))
+        if self.link_specific:
+            flows = tf.einsum("ijk,jk -> ij", flows, self.poly_weights)
+        else:
+            flows = tf.einsum("ijk,lk -> ij", flows, self.poly_weights)
 
         return tf.cast(tf.experimental.numpy.take(flows, tf.cast(period_ids[:,0], dtype=tf.int32), 0), self.dtype)
 
@@ -525,11 +666,22 @@ class PolynomialLayer(tf.keras.layers.Layer):
         # To ensure monotonicity
         # self.weights[0].assign(tf.nn.relu(coefs.reshape(self.weights[0].shape)))
 
-        self.weights[0].assign(coefs.reshape(self.weights[0].shape))
+        # self.weights[0].assign(coefs.reshape(self.weights[0].shape))
+        with block_output(show_stdout=False, show_stderr=False):
+            self._poly_weights.assign(np.log(tf.repeat(coefs, self._poly_weights.shape[0], axis =0)))
 
-        self.model.trainable = self.trainable_layer
+        # self.model.trainable = self.trainable_layer
 
         # self._pretrain_weights = False
+
+        # poly_weights = np.array2string(self.weights[0].numpy().flatten(),
+        #                                formatter={'float': lambda x: f'{x:.1e}'})
+
+        poly_weights = np.array2string(
+            np.mean(self.poly_weights.numpy(), axis=0),
+            formatter={'float': lambda x: f'{x:.1e}'})
+
+        print(f"\nPretrained polynomial weights: {poly_weights}\n", end='')
 
 
 class SingleWeightLayer(tf.keras.layers.Layer):
@@ -544,15 +696,57 @@ class SingleWeightLayer(tf.keras.layers.Layer):
 
     def build(self, input_shape):
         self._parameter = tf.Variable(np.log(self.initial_value),
-                                     dtype=self.dtype,
-                                     # constraint = tf.keras.constraints.NonNeg()
-                                     )
+                                      dtype=self.dtype,
+                                      # constraint = tf.keras.constraints.NonNeg()
+                                      )
     @property
     def parameter(self):
         return tf.exp(self._parameter)
 
     def call(self, input):
         return self.parameter*input
+
+class KernelWeightLayer(tf.keras.layers.Layer):
+    def __init__(self,
+                 initial_value_diagonal = None,
+                 initial_value_nondiagonal = None,
+                 n_links = None,
+                 kernel_constraint = None,
+                 *args,
+                 **kwargs):
+
+        super().__init__(*args, **kwargs)
+
+        self.initial_value_diagonal = initial_value_diagonal
+        self.initial_value_nondiagonal = initial_value_nondiagonal
+        self.n_links = n_links
+        self._kernel_matrix = None
+        self.kernel_constraint = kernel_constraint
+
+    def build(self, input_shape):
+        self._diagonal_parameters = tf.Variable(np.log(self.initial_value_diagonal*tf.ones(self.n_links)),
+                                      dtype=self.dtype,
+                                      name = 'diagonal_kernel_matrix'
+                                      # constraint = tf.keras.constraints.NonNeg()
+                                      )
+
+        self._nondiagonal_parameters = tf.Variable(self.initial_value_nondiagonal*tf.ones((self.n_links,self.n_links)),
+                                        dtype=self.dtype,
+                                        name='nondiagonal_kernel_matrix'
+                                        # constraint = tf.keras.constraints.NonNeg()
+                                        )
+
+    @property
+    def kernel_matrix(self):
+        self._kernel_matrix = tf.exp(self._diagonal_parameters)*tf.eye(self.n_links) \
+                              + self._nondiagonal_parameters - tf.linalg.diag_part(self._nondiagonal_parameters)
+
+        self._kernel_matrix = self.kernel_constraint(self._kernel_matrix)
+
+        return self._kernel_matrix
+
+    def call(self, input):
+        return tf.matmul(input,self.kernel_matrix)
 
 class MLP(PerformanceFunction):
 
@@ -588,14 +782,12 @@ class MLP(PerformanceFunction):
 
         # self.weights_performance_function = tf.Variable(tf.ones(n_links,dtype = self.dtype))
 
+
         if free_flow_traveltimes is not None:
             self.bias_initializer = tf.constant_initializer(free_flow_traveltimes)
             # if capacities is not None:
-            # kernel_initializer = tf.constant_initializer(0)
 
-            # self.kernel_initializer = tf.constant_initializer(0.15 * np.eye(self.n_links))
-            # Initialize to one works the best
-            self.kernel_initializer = tf.constant_initializer(1 * np.eye(n_links))
+        self.kernel_initializer = tf.constant_initializer(self.kernel_constraint.initial_values.numpy())
 
         self.bias_contraint = BiasConstraint(free_flow_traveltimes=self.free_flow_traveltimes)
 
@@ -613,27 +805,35 @@ class MLP(PerformanceFunction):
         if self.kernel_constraint.homogenous:
             # output_dim = 1
             # self.model.add(SingleWeightLayer(initial_value = 0.15))
-            self.model.add(SingleWeightLayer(initial_value=1, name='link_flow_interaction_matrix'))
+            self.model.add(SingleWeightLayer(initial_value=1, name='link_flow_interaction_parameter'))
 
         else:
-            output_dim = self.n_links
 
-            for i in range(self.depth):
-                self.model.add(tf.keras.layers.Dense(output_dim,
-                                                     # activation='relu',
-                                                     name='link_flow_interaction_matrix',
-                                                     kernel_initializer=self.kernel_initializer,
-                                                     bias_initializer=self.bias_initializer,
-                                                     use_bias=False,
-                                                     # kernel_constraint = tf.keras.constraints.NonNeg()
-                                                     kernel_constraint=self.kernel_constraint,
-                                                     bias_constraint=self.bias_contraint
-                                                     # bias_constraint = tf.keras.constraints.NonNeg()
-                                                     ))
+            self.model.add(KernelWeightLayer(initial_value_diagonal=1,
+                                             initial_value_nondiagonal=1e-1,
+                                             n_links = self.n_links,
+                                             kernel_constraint= self.kernel_constraint,
+                                             name='link_flow_interaction_matrix'))
 
-            # self.model.add(tf.keras.layers.ReLU())
-            self.model.add(tf.keras.layers.LeakyReLU(self.alpha_relu))
-            # self.model.add(tf.keras.layers.PReLU())
+        # else:
+        #     output_dim = self.n_links
+        #
+        #     for i in range(self.depth):
+        #         self.model.add(tf.keras.layers.Dense(output_dim,
+        #                                              # activation='relu',
+        #                                              name='link_flow_interaction_matrix',
+        #                                              kernel_initializer=self.kernel_initializer,
+        #                                              bias_initializer=self.bias_initializer,
+        #                                              use_bias=False,
+        #                                              # kernel_constraint = tf.keras.constraints.NonNeg()
+        #                                              kernel_constraint=self.kernel_constraint,
+        #                                              bias_constraint=self.bias_contraint
+        #                                              # bias_constraint = tf.keras.constraints.NonNeg()
+        #                                              ))
+        #
+        #     # self.model.add(tf.keras.layers.ReLU())
+        #     self.model.add(tf.keras.layers.LeakyReLU(self.alpha_relu))
+        #     # self.model.add(tf.keras.layers.PReLU())
 
 
         # if kernel_constraint is None or (self.kernel_constraint.diagonal is False):
@@ -645,7 +845,7 @@ class MLP(PerformanceFunction):
         # Build parameters polynomial layer if it has been provided
         if self.polynomial_layer is not None and not self.polynomial_layer.built:
             self.polynomial_layer.build(n_links = self.n_links)
-            
+
     def regularizer(self):
 
         regularization_loss = 0
@@ -654,9 +854,9 @@ class MLP(PerformanceFunction):
             kernel = self.model.trainable_variables[0]
 
             regularization_loss = regularization_loss * \
-                                      tf.math.abs(tf.reduce_sum(
-                                          kernel - tf.eye(kernel.shape[0]) * tf.linalg.diag_part(kernel)))
-            
+                                  tf.math.abs(tf.reduce_sum(
+                                      kernel - tf.eye(kernel.shape[0]) * tf.linalg.diag_part(kernel)))
+
         return regularization_loss
 
     def call(self, flows):
@@ -705,12 +905,14 @@ class BPR(PerformanceFunction):
                  capacities=None,
                  free_flow_traveltimes=None,
                  dtype=None,
+                 max_traveltime_factor = None,
                  *args,
                  **kwargs):
-        super().__init__(dtype=dtype, type='bpr')
+        super().__init__(dtype=dtype, type='bpr', max_traveltime_factor = max_traveltime_factor)
 
         self.parameters = pesuelogit.models.BPRParameters(*args, **kwargs)
         self.k = tf.constant(capacities, dtype=self.dtype)
+        self.capacities = tf.constant(capacities, dtype=self.dtype)
         self.tt_ff = free_flow_traveltimes
 
         # Initialization of learnable variables
@@ -724,7 +926,7 @@ class BPR(PerformanceFunction):
         if self._alpha is None:
             return float('nan')
         # Without the exponential trick, the estimation of alpha is more unstable.
-        return tf.clip_by_value(tf.exp(self._alpha), 0, 8)
+        return tf.clip_by_value(tf.exp(self._alpha), 0, 10)
         # return tf.clip_by_value(tf.exp(self._alpha), 0, 4)
 
     @property
@@ -733,7 +935,7 @@ class BPR(PerformanceFunction):
         if self._beta is None:
             return float('nan')
 
-        return tf.clip_by_value(tf.exp(self._beta), 0, 8)
+        return tf.clip_by_value(tf.exp(self._beta), 0, 10)
         # return tf.clip_by_value(tf.exp(self._beta),1,4.1)
         # return tf.clip_by_value(tf.exp(self._beta), self._epsilon, 10)
 
@@ -773,10 +975,8 @@ class BPR(PerformanceFunction):
         return tf.cast(self.traveltimes(flows), self.dtype)
 
 
-
 class NESUELOGIT(PESUELOGIT):
     def __init__(self,
-                 # od: ODParameters = None,
                  generation: GenerationParameters = None,
                  performance_function: PerformanceFunction = None,
                  input_shape=(256, 256, 3),
@@ -823,15 +1023,15 @@ class NESUELOGIT(PESUELOGIT):
     #     return tensor
 
 
-    def update_predictions(self, X, period_dict = None):
+    def update_predictions(self, X, period_dict = None, update_period_dict = False):
 
-        self.set_period_ids(X.numpy(), period_dict, update_period_dict=False)
+        self.set_period_ids(X.numpy(), period_dict, update_period_dict= update_period_dict)
         self.period_ids = X[:,:,-1]
 
         self._predicted_flow = self.predict_flow()
         self._predicted_traveltime = self.predict_traveltime()
         self._output_flow = self.compute_link_flows(X)
-        self._input_flow = self.flows()
+        self._input_flow = self.flows
 
     def compute_loss_metric(self,
                             metric=mse,
@@ -883,6 +1083,7 @@ class NESUELOGIT(PESUELOGIT):
 
         return metrics_df
 
+    @property
     def flows(self):
         flows = tf.math.pow(self._flows, 2)
 
@@ -899,8 +1100,8 @@ class NESUELOGIT(PESUELOGIT):
         # output_flow = predicted_flow
         # predicted_traveltimes = self.bpr_traveltimes(predicted_flow)
 
-        # input_flow = tf.stop_gradient(self.flows())
-        self._input_flow = self.flows()
+        # input_flow = tf.stop_gradient(self.flows)
+        self._input_flow = self.flows
 
         self._output_flow = self.compute_link_flows(X)
 
@@ -910,15 +1111,15 @@ class NESUELOGIT(PESUELOGIT):
 
         # predicted_traveltimes = tf.stop_gradient(self.traveltimes())
         self._predicted_traveltime = self.traveltimes()
-        
+
     def equilibrium_loss(self, input_flow, output_flow, observed_flow, Y, loss_metric = mse):
-        
+
         """ 
         Equilibrium loss is normalized depending on the loss metric used to compute the link flow loss
         """
 
         # loss = loss_metric(actual=predicted_flow, predicted=output_flow)
-        # loss = loss_metric(actual=self.flows(), predicted=output_flow)
+        # loss = loss_metric(actual=self.flows, predicted=output_flow)
         if loss_metric == nrmse:
             # loss = rmse(actual=input_flow, predicted=output_flow)
             loss = rmse(actual=input_flow, predicted=output_flow)
@@ -1003,7 +1204,6 @@ class NESUELOGIT(PESUELOGIT):
                                         tt_ff=self.tt_ff,
                                         k_threshold = k_threshold
                                         )
-        
 
     def loss_function(self,
                       X,
@@ -1020,6 +1220,9 @@ class NESUELOGIT(PESUELOGIT):
         """
 
         self.forward(X)
+
+        # Normalize weights to one
+        lambdas = {k: (v / np.sum(list(lambdas.values()))) for k, v in lambdas.items()}
 
         if Y is not None:
             # self._observed_traveltime, self._observed_flow = tf.unstack(self.mask_Y(Y), axis=-1)
@@ -1039,7 +1242,6 @@ class NESUELOGIT(PESUELOGIT):
 
         loss = dict.fromkeys(list(lambdas_vals.keys()) + ['total'], tf.constant(0, dtype=self.dtype))
 
-        # TODO: Move this code block to MLP class
         if self.performance_function.type == 'mlp' and lambdas_vals['mlp_regularizer']>0:
             loss['mlp_regularizer'] = self.performance_function.regularizer()
 
@@ -1047,29 +1249,32 @@ class NESUELOGIT(PESUELOGIT):
         #     lambdas_vals['generation'] = 1e2
         #     loss['generation'] = mse(actual = compute_generated_trips(historic_od, ods = self.od.ods),
         #                              predicted = compute_generated_trips(self.q, ods = self.od.ods))
-        
+
         # Equilibrium loss 
-        loss['equilibrium'] = self.equilibrium_loss(loss_metric = loss_metric, 
-                                                Y = Y, 
-                                                input_flow = self._input_flow,
-                                                output_flow = self._output_flow,
-                                                observed_flow = self._observed_flow)
+        loss['equilibrium'] = self.equilibrium_loss(loss_metric = loss_metric,
+                                                    Y = Y,
+                                                    input_flow = self._input_flow,
+                                                    output_flow = self._output_flow,
+                                                    observed_flow = self._observed_flow)
 
         # np.nanmean(self._observed_traveltime)
         # np.nanmean(predicted_traveltimes)
+        historic_od = self.q.numpy()
+        historic_od[:] = np.nan
 
-        historic_od = tf.cast(self.od.historic_values_array, self.dtype)
+        # if lambdas_vals['od'] > 0 and self.od.historic_values is not None and self.q is not None:
+        if self.od.historic_values is not None and self.q is not None:
+            historic_od = tf.cast(self.od.historic_values_array, self.dtype)
+            #historic_od = tf.cast(tf.stack(list(self.od.historic_values.values())), self.dtype)
 
-        loss.update({
-            'od': loss_metric(actual=historic_od, predicted=self.q),
-            'ntrips': sse(actual=np.sum(self.q, axis=1),
-                          predicted=self.od.total_trips_array) / historic_od.shape[1],
-            'prop_od': loss_metric(actual=normalize_od(historic_od), predicted=normalize_od(self.q)),
-            # 'theta': tf.reduce_mean(tf.norm(self.theta, 1)),
-            # # #todo: review bpr or traveltime loss, should they be equivalent?
-            # 'bpr': loss_metric(actual=self.bpr_traveltimes(predicted_flow),
-            #                    predicted=predicted_traveltimes),
-        })
+            loss.update({
+                'od': loss_metric(actual=historic_od, predicted=self.q),
+                'ntrips': sse(actual=np.sum(self.q, axis=1),
+                              predicted=self.od.total_trips_array) / historic_od.shape[1],
+                'prop_od': loss_metric(actual=normalize_od(historic_od), predicted=normalize_od(self.q)),
+            })
+        # else:
+        #     loss.update({'od': float('nan'), 'ntrips': float('nan'), 'prop_od': float('nan')})
 
         if Y is not None:
             loss.update({
@@ -1078,12 +1283,14 @@ class NESUELOGIT(PESUELOGIT):
                 'traveltime': loss_metric(
                     # actual=tf.reduce_mean(self._observed_traveltime, axis = 0,keepdims=True),
                     actual=self._observed_traveltime,
-                    predicted=self._predicted_traveltime)}
+                    predicted=self._predicted_traveltime),
+                # 'theta': tf.reduce_mean(tf.norm(self.theta, 1)),
+            }
 
-            # mse(
-            #     # actual=tf.reduce_mean(self._observed_traveltime, axis = 0,keepdims=True),
-            #     actual=self._observed_traveltime,
-            #     predicted=self._predicted_traveltime)
+                # mse(
+                #     # actual=tf.reduce_mean(self._observed_traveltime, axis = 0,keepdims=True),
+                #     actual=self._observed_traveltime,
+                #     predicted=self._predicted_traveltime)
             )
 
         loss['total'] = tf.constant(0, self.dtype)
@@ -1171,10 +1378,10 @@ class NESUELOGIT(PESUELOGIT):
         if model is None:
             model = self
 
-        link_flows = model.flows()
+        link_flows = model.flows
         if model.n_periods > 1:
             link_flows = tf.concat([tf.expand_dims(tf.reduce_mean(link_flows, axis=0), axis=0)
-                                    for link_flows in model.split_link_flows_by_period(model.flows())], axis=0)
+                                    for link_flows in model.split_link_flows_by_period(model.flows)], axis=0)
 
         initial_values = {'flows': link_flows,
                           'theta': model.theta,
@@ -1189,7 +1396,15 @@ class NESUELOGIT(PESUELOGIT):
 
         return initial_values
 
-    def mask_predicted_traveltimes(self, tt, k, k_threshold=1e5):
+    def mask_predicted_traveltimes(self, tt, k, k_threshold=1e5, max_factor = None):
+        """
+
+        :param tt:
+        :param k:
+        :param k_threshold:
+        :param max_factor: constraint the maximum value that travel times can take
+        :return:
+        """
 
         # mask1 = np.where((k >= k_threshold) | (self.tt_ff == 0), 1, 0)
         # mask2 = np.where((k >= k_threshold), 1, 0)
@@ -1200,7 +1415,14 @@ class NESUELOGIT(PESUELOGIT):
         mask1 = np.where((k >= k_threshold), 1, 0)
         mask2 = np.where((self.tt_ff == 0), 1, 0)
 
-        return (1 - mask2) * ((1 - mask1) * tt + mask1 * self.tt_ff)
+        predicted_traveltimes = (1 - mask2) * ((1 - mask1) * tt + mask1 * self.tt_ff)
+
+        if max_factor is not None:
+            # TODO: Define factor according to speed instead of travel time by using link lengths
+            max_traveltimes = tf.cast(max_factor * self.tt_ff * tf.ones_like(tt), dtype=self.dtype)
+            return tf.math.minimum(predicted_traveltimes, max_traveltimes)
+
+        return predicted_traveltimes
 
         # return self.tt_ff * (1 + self.alpha * tf.math.pow(x / k, self.beta))
 
@@ -1209,7 +1431,7 @@ class NESUELOGIT(PESUELOGIT):
 
         if self.performance_function.type == 'bpr':
             if flows is None:
-                flows = self.flows()
+                flows = self.flows
 
         elif self.performance_function.type == 'mlp':
 
@@ -1225,7 +1447,8 @@ class NESUELOGIT(PESUELOGIT):
         traveltimes = self.performance_function.call(flows)
 
         traveltimes = self.mask_predicted_traveltimes(tt=traveltimes,
-                                                      k=np.array([link.bpr.k for link in self.network.links]))
+                                                      k=np.array([link.bpr.k for link in self.network.links]),
+                                                      max_factor = self.performance_function.max_traveltime_factor)
 
         return traveltimes
 
@@ -1236,7 +1459,7 @@ class NESUELOGIT(PESUELOGIT):
         return self.traveltimes()
 
     def predict_flow(self):
-        return self.flows()
+        return self.flows
 
     def class_membership_probabilities(self):
 
@@ -1308,7 +1531,7 @@ class NESUELOGIT(PESUELOGIT):
         if self._kappa is not None:
             return self.project_parameters(values=self._kappa, parameters=self.generation)
         else:
-            return 0
+            return None
         # return self._kappa
 
     @property
@@ -1430,7 +1653,7 @@ class NESUELOGIT(PESUELOGIT):
         :return: a vector with the total number of trips at each location
         '''
 
-        if self.node_data is None:
+        if self.node_data is None or self._kappa is None:
             g = self.fixed_effect_generation
 
         else:
@@ -1503,6 +1726,10 @@ class NESUELOGIT(PESUELOGIT):
     def q(self):
 
         if self.generation is None:
+
+            if self._q is None:
+                return None
+
             # Old representation of OD matrix in dense form
             return tf.math.pow(self._q, 2)
 
@@ -1523,18 +1750,19 @@ class NESUELOGIT(PESUELOGIT):
         return q
 
     @property
-    def Q(self):
+    def Q(self, average = False):
 
-        q = self.q
-
-        if tf.rank(self.q) == 2:
+        if average and tf.rank(self.q) == 2:
             q = tf.reduce_mean(self.q, axis=0)
 
-        return tf.SparseTensor(
-            indices=self.triplist,
-            values=q,
-            dense_shape=(self.n_nodes, self.n_nodes)
-        )
+            return tf.SparseTensor(
+                indices=self.triplist,
+                values=q,
+                dense_shape=(self.n_periods, self.n_nodes, self.n_nodes)
+            )
+
+        return tf.sparse.to_dense(self.od.get_sparse_tensor(values = self.q))
+
 
     def create_tensor_variables(self, keys: Dict[str, bool] = None,
                                 trainables: Dict[str, bool] = None,
@@ -1563,7 +1791,9 @@ class NESUELOGIT(PESUELOGIT):
         initial_values_defaults = {
             'flows': tf.constant(tf.zeros([self.n_periods, self.n_links], dtype=self.dtype)),
             # 'flows': tf.constant(tf.zeros([self.n_links], dtype=self.dtype)),
-            'q': tf.cast(self.od.initial_values_array(), self.dtype),
+            # 'q': tf.cast(self.od.initial_values_array(), self.dtype),
+            'q':  tf.cast(self.od.initial_values_array(), self.dtype) if len(self.od.initial_value.shape) == 1 else
+            tf.cast(self.od.initial_value, self.dtype),
             'theta': tf.cast(self.utility.initial_values_array(self.utility.features), self.dtype),
             'kappa': tf.cast(self.generation.initial_values_array(
                 self.generation.features), self.dtype) if self.generation is not None else None,
@@ -1633,7 +1863,6 @@ class NESUELOGIT(PESUELOGIT):
             self._parameters['fixed_effect'] = self._fixed_effect
 
         if self.generation is None:
-
             self._q = tf.Variable(initial_value=np.sqrt(initial_values['q']),
                                   trainable=trainables['q'],
                                   name=self.od.key,
@@ -1645,10 +1874,10 @@ class NESUELOGIT(PESUELOGIT):
 
             # Generation features
 
-            initial_values['fixed_effect_generation'] \
-                = self.generation.initial_values['fixed_effect'] * tf.ones((self.n_periods, len(self.od.nodes)))
+            initial_values['fixed_effect_generation'] = self.generation.initial_values['fixed_effect']
+
             # initial_values['fixed_effect_generation'] \
-            #     = self.generation.initial_values['fixed_effect'] * tf.ones((self.n_periods, self.network.get_n_nodes()))
+            #      = self.generation.initial_values['fixed_effect'] * tf.ones((self.n_periods, len(self.od.nodes)))
 
 
             # Link specific effect (act as an intercept)
@@ -1672,14 +1901,18 @@ class NESUELOGIT(PESUELOGIT):
                         dtype=self.dtype)
                 )
 
-            # TODO: Temporarily, the fixed effect parameter defines if kappa is trainable.
-            self._kappa = tf.Variable(tf.stack(kappa, axis=1),
-                                      trainable=self.generation.trainables['fixed_effect'],
-                                      name='kappa')
+            # TODO: Temporarily, the first feature in generation features dict defines if kappa is trainable.
+            # self._kappa = None
+
+            if len(self.generation.features) > 0:
+                self._kappa = tf.Variable(tf.stack(kappa, axis=1),
+                                          # trainable=self.generation.trainables['fixed_effect'],
+                                          trainable=self.generation.trainables[self.generation.features[0]],
+                                          name='kappa')
 
             # Distribution features
             initial_values['fixed_effect_od'] \
-                = tf.constant(0, shape=tf.TensorShape(self.od.initial_values_array().shape), dtype=self.dtype)
+                = tf.constant(0, shape=tf.TensorShape(self.od.initial_value.shape), dtype=self.dtype)
 
             self._fixed_effect_od = tf.Variable(
                 initial_value=initial_values['fixed_effect_od'],
@@ -1779,7 +2012,8 @@ class NESUELOGIT(PESUELOGIT):
         return tensor of dimension (n_timepoints, n_links) with a forward pass
         """
 
-        self.generation._pretrain_generation_weights = pretrain_generation_weights
+        if self.generation is not None:
+            self.generation._pretrain_generation_weights = pretrain_generation_weights
 
         # sum = np.sum(X[:, :, -1])
         self.compute_equilibrium(X, **kwargs)
@@ -1847,14 +2081,14 @@ class NESUELOGIT(PESUELOGIT):
             X_val = self.set_period_ids(X=X_val.numpy())
 
         # Also update period ids values in historic values of OD and total trips dictionary
-        # (#TODO: move this code under od class)
+        # (#TODO: may move this code under od class)
 
-        if self.od.historic_values is not None:
+        if self.od.historic_values is not None and isinstance(self.od.historic_values, dict):
             new_historic_values = {}
             for period_id, od in self.od.historic_values.items():
                 for k, v in self.period_dict.items():
                     if k == period_id:
-                        new_historic_values[k] = od
+                        new_historic_values[v] = od
 
             self.od.historic_values = new_historic_values
 
@@ -1864,7 +2098,7 @@ class NESUELOGIT(PESUELOGIT):
             for period_id, ntrips in self.od.total_trips.items():
                 for k, v in self.period_dict.items():
                     if k == period_id:
-                        new_total_trips[k] = ntrips
+                        new_total_trips[v] = ntrips
 
             self.od.total_trips = new_total_trips
 
@@ -1874,6 +2108,8 @@ class NESUELOGIT(PESUELOGIT):
         self.load_weights(self._filepath_weights)
 
     def build(self, input_shape=None):
+
+        # TODO: should require period_dict based on input dictionary
 
         if not self.built:
             self.create_tensor_variables()
@@ -1900,9 +2136,10 @@ class NESUELOGIT(PESUELOGIT):
             optimizers=None,
             loss_weights: Dict[str, float] = None,
             epochs: Dict[str, int] = None,
-            threshold_relative_gap: float = 1e-4,
+            threshold_relative_gap: float = float('inf'),
             loss_metric=None,
             momentum_equilibrium=1,
+            pretrain_link_flows = False,
             equilibrium_stage=False,
             alternating_optimization=False,
             relative_losses=True,
@@ -1932,7 +2169,7 @@ class NESUELOGIT(PESUELOGIT):
             # self.generation._pretrain_generation_weights = False
 
         # Initialization of endogenous travel times and flows
-        if np.sum(self.flows().numpy()) == 0:
+        if pretrain_link_flows:
 
             predicted_flow = self.compute_link_flows(X_train)
 
@@ -1946,21 +2183,14 @@ class NESUELOGIT(PESUELOGIT):
 
                 self._flows.assign(tf.math.sqrt(predicted_flow))
 
-            if self.endogenous_traveltimes:
-                predicted_traveltimes = self.bpr_traveltimes(predicted_flow)
-                self._traveltimes.assign(tf.reduce_mean(predicted_traveltimes, axis=0))
+            print("\nLink flows and travel times were pretrained with single pass of traffic assignment")
 
-            # Pretrained polynomial weights
-            if self.performance_function.type == 'mlp':
-                polynomial_layer = self.performance_function.polynomial_layer
-                if polynomial_layer._pretrain_weights:
-
-                    polynomial_layer.pretrain_weights(flows = tf.math.pow(self._flows, 2),
-                                                      free_flow_traveltimes=self.tt_ff,
-                                                      capacities=self.performance_function.capacities)
-
-
-
+        # Pretrained polynomial weights
+        if self.performance_function.type == 'mlp' and self.performance_function.polynomial_layer._pretrain_weights:
+                self.performance_function.polynomial_layer.pretrain_weights(
+                    flows = tf.math.pow(self._flows, 2),
+                    free_flow_traveltimes=self.tt_ff,
+                    capacities=self.performance_function.capacities)
 
         # Split data by batch
         if batch_size is None:
@@ -2041,9 +2271,10 @@ class NESUELOGIT(PESUELOGIT):
 
         # Print benchmark based on mean reported in training data
         if Y_val is not None:
-            print('\n', "Benchmark metrics using mean in training data as predictions in the validation set: ", '\n')
+            print("Benchmark metrics using mean in training data to make predictions in the validation set: ")
             with pd.option_context('display.float_format', '{:0.2g}'.format):
-                print(compute_benchmark_metrics(metrics={'mape': mape, 'mse': mse, 'r2': r2}, Y_ref=Y_train, Y=Y_val))
+                print('\n')
+                print(compute_benchmark_metrics(metrics={'mape': mape, 'mse': mse, 'r2': r2_score}, Y_ref=Y_train, Y=Y_val))
 
         # Training loop
         while not convergence:
@@ -2067,34 +2298,33 @@ class NESUELOGIT(PESUELOGIT):
                           f"obs [t x]: {coverages_count['val']}, "
                           f"coverage [t x]: {coverages['val']}")
 
+                print('')
+
             if not convergence:
                 # self.period_ids = X_train[:, :, -1]
                 path_flows = self.path_flows(self.path_probabilities(self.path_utilities(self.link_utilities(X_train))))
                 link_flow = self.link_flows(path_flows)
-                # relative_x = float(np.nanmean(np.abs(tf.divide(link_flow,self.flows()) - 1)))
+                # relative_x = float(np.nanmean(np.abs(tf.divide(link_flow,self.flows) - 1)))
 
                 if epoch >= 0:
                     normalizer = 1
-                    if self.flows().shape[0] < link_flow.shape[0]:
-                        normalizer = int(link_flow.shape[0] / self.flows().shape[0])
+                    if self.flows.shape[0] < link_flow.shape[0]:
+                        normalizer = int(link_flow.shape[0] / self.flows.shape[0])
 
                     # We now use the definition of relative residual
                     relative_gap = (
-                            tf.norm(link_flow - self.flows(), 1) / (normalizer * tf.norm(self.flows(), 1))).numpy()
+                            tf.norm(link_flow - self.flows, 1) / (normalizer * tf.norm(self.flows, 1))).numpy()
                     relative_gaps.append(relative_gap)
 
                 # print(f"{i}: loss={loss.numpy():0.4g}, theta = {model.theta.numpy()}")
 
-            if (equilibrium_stage and (epoch == (epochs['learning'] + 1)) and epochs['learning'] != 0) \
-                    or (epochs['learning'] == 0 and epoch == 0):
-                print(f"\nEquilibrium stage: {epochs['equilibrium']} epochs")
-                current_stage = 'equilibrium'
-
-            if (epoch == total_epochs) or (abs(relative_gaps[-1]) < threshold_relative_gap and current_stage == 'equilibrium'):
+            if (epoch == total_epochs) or (abs(relative_gaps[-1]) < threshold_relative_gap and
+                                           ((current_stage == 'equilibrium') or (epoch == epochs['learning']))):
                 convergence = True
 
+
             if epoch == 0 and epochs['learning'] > 0:
-                print(f"\nLearning stage: {epochs['learning']} epochs")
+                print(f"Learning stage: {epochs['learning']} epochs")
 
             if (epoch % epochs_print_interval['learning'] == 0) or (epoch == 1) or (epoch == epochs['learning'] + 1) or \
                     convergence or (equilibrium_stage and epoch % epochs_print_interval['equilibrium'] == 0):
@@ -2122,36 +2352,51 @@ class NESUELOGIT(PESUELOGIT):
                           f"val mape flow={float(val_losses[-1]['mape_flow']):0.1f}, ",
                           end='', flush=True)
 
-                print(  # f"train_loss bpr={float(train_loss['loss_bpr'].numpy()):0.2g}, "
+                print(# f"train_loss bpr={float(train_loss['loss_bpr'].numpy()):0.2g}, "
                     # f"val_loss bpr={float(val_loss['loss_bpr'].numpy()):0.2g}, "
                     # f"theta = {np.round(np.unique(self.theta.numpy(),axis =0),3)}, "
                     f"theta = {np.round(np.mean(self.theta.numpy(), axis=0), 3)}, "
                     f"avg rr = {np.array(compute_rr(self.get_parameters_estimates().to_dict(orient='records')[0])):0.2f}, "
-                    f"psc_factor = {self.psc_factor.numpy()}, "
+                    # f"psc_factor = {self.psc_factor.numpy()}, "
                     f"avg theta fixed effect = {np.mean(self.fixed_effect):0.2g}, "
                     # f"avg abs diff demand ={np.nanmean(np.abs(self.q - self.historic_od(self.q))):0.2g}, ",end = '')
                     f"loss prop od={train_losses[-1]['loss_od']:0.2g}, "
-                    f"loss ntrips={train_losses[-1]['loss_ntrips']:0.2g}, "
-                    f"total trips={np.array2string(np.round(np.sum(self.q, axis=1)), formatter={'float': lambda x: f'{x:.1e}'})}, "
-                    f"lambda eq={loss_weights['equilibrium']:0.2g}, "
-                    # f"relative x={relative_x:0.2g}, "
-                    f"relative gap={relative_gaps[-1]:0.2g}, ", end='', flush=True)
-
+                    # f"loss ntrips={train_losses[-1]['loss_ntrips']:0.2g}, "
+                    f"total trips={np.array2string(np.round(np.sum(self.q, axis=1)), formatter={'float': lambda x: f'{x:.2e}'})}, ",
+                    end='', flush=True)
                 if self.performance_function.type == 'bpr':
                     print(f"avg alpha={np.mean(self.performance_function.alpha.numpy()):0.2g}, "
                           f"avg beta={np.mean(self.performance_function.beta.numpy()):0.2g}, ", end='', flush=True)
-                if self.generation is not None:
+                elif self.performance_function.type == 'mlp':
+                    # poly_weights = np.array2string(self.performance_function.weights[0].numpy().flatten(),
+                    #                                formatter={'float': lambda x: f'{x:.1e}'})
+                    poly_weights = np.array2string(
+                        np.mean(self.performance_function.polynomial_layer.poly_weights.numpy(),axis = 0),
+                        formatter={'float': lambda x: f'{x:.1e}'})
+                    print(f"polynomial weights: {poly_weights}, ", end='', flush=True)
+
+                if self._kappa is not None:
                     print(f"kappa = {np.round(np.mean(self.kappa.numpy(), axis=0), 3)}, ", end='', flush=True)
 
                 if train_losses[-1].get('loss_equilibrium', False):
-                    print(f"train equilibrium loss={train_losses[-1]['loss_equilibrium']:0.2g}, ",
-                          end='', flush=True)
-                    print(f"val equilibrium loss={val_losses[-1]['loss_equilibrium']:0.2g}, ",
-                          end='', flush=True)
+                    print( f"lambda eq={loss_weights['equilibrium']:0.2g}, "
+                           f"relative gap={relative_gaps[-1]:0.2g}, ", end='', flush=True)
+
+                    print(f"train equilibrium loss={train_losses[-1]['loss_equilibrium']:0.2g}, ", end='', flush=True)
+
+                    if Y_val is not None:
+                        print(f"val equilibrium loss={val_losses[-1]['loss_equilibrium']:0.2g}, ", end='', flush=True)
 
                 print(f"time:{time.time() - t0: 0.1f}")
 
                 t0 = time.time()
+
+            if epochs['learning'] > 0 and not convergence and \
+                    ((equilibrium_stage and (epoch == (epochs['learning'])) and epochs['learning'] != 0) or
+                     (epochs['learning'] == 0 and epoch == 0)):
+
+                current_stage = 'equilibrium'
+                print(f"\nEquilibrium stage: {epochs['equilibrium']} epochs")
 
             if not convergence:
 
@@ -2160,9 +2405,6 @@ class NESUELOGIT(PESUELOGIT):
                 # selected_trainable_variables = trainable_variables
 
                 loss_weights['equilibrium'] = loss_weights['equilibrium'] / momentum_equilibrium
-
-                # Normalize weights to one
-                loss_weights = {k: (v / np.sum(list(loss_weights.values()))) for k, v in loss_weights.items()}
 
                 if epoch < epochs['learning']:
                     # Learning part
@@ -2194,6 +2436,7 @@ class NESUELOGIT(PESUELOGIT):
                     elif current_stage == 'learning' and alternating_optimization:
                         # loss_weights_equilibrium = loss_weights.copy() # This is like coordinate descent
                         iterations = 1
+
 
                     # for i in range(iterations):
                     trainable_variables = [j for j in self.trainable_variables if
@@ -2246,6 +2489,9 @@ class NESUELOGIT(PESUELOGIT):
                 estimates.append(self.get_parameters_estimates())
 
                 epoch += 1
+
+            if convergence and (abs(relative_gaps[-1]) < threshold_relative_gap):
+                print(f'\nRelative gap threshold of {threshold_relative_gap} was achieved in {current_stage} stage')
 
             if self.column_generator is not None:
                 # TODO: Column generation (limit the options to more fundamental ones)
@@ -2420,12 +2666,14 @@ def train_kfold(model: NESUELOGIT,
 
     optimizers = kwargs['optimizers']
 
-    metrics = pd.DataFrame()
+    metrics_df = pd.DataFrame()
 
     model.build()
     # Create folder kfold if it does not exist
     filepath = f"output/models/kfold/{model._model_id}.h5"
     model.save_weights(filepath)
+
+    parameters_df = pd.DataFrame({})
 
     for i, traveltime_fold, flow_fold in zip(range(1, n_splits + 1), traveltime_folds, flow_folds):
         print(f'\nFold {i}/{n_splits}')
@@ -2441,37 +2689,58 @@ def train_kfold(model: NESUELOGIT,
 
         X_train, X_val, Y_train, Y_val = [tf.cast(i, model.dtype) for i in [X_train, X_val, Y_train, Y_val]]
 
-        # Compute metrics before training
+        # Compute metrics_df before training
         model.load_weights(filepath)
         with block_output(show_stdout=False, show_stderr=False):
             model.fit(X_train, Y_train, X_val, Y_val, *args,
                       **{**kwargs, **{'epochs': {'training': 0, 'equilibrium': 0}}})
 
         for X_cur, Y_cur, dataset_label in [(X_train, Y_train, 'training'), (X_val, Y_val, 'validation')]:
-            cur_metrics = model.compute_loss_metrics(metrics={'mape': mape, 'mse': mse, 'r2': r2},
-                                                     X=X_cur, Y=Y_cur).assign(dataset=dataset_label)
+            cur_metrics_df = model.compute_loss_metrics(metrics={'mape': mape, 'mse': mse, 'r2': r2_score},
+                                                        X=X_cur, Y=Y_cur).assign(dataset=dataset_label)
 
-            metrics = pd.concat([metrics, cur_metrics.assign(fold=i, stage='initial')])
+            metrics_df = pd.concat([metrics_df, cur_metrics_df.assign(fold=i, stage='initial')])
 
-        # Compute metrics after training
+        # Compute metrics_df after training
         model.load_weights(filepath)
+
         model.fit(X_train, Y_train, X_val, Y_val, *args, **kwargs)
 
-        for X_cur, Y_cur, dataset_label in [(X_train, Y_train, 'training'), (X_val, Y_val, 'validation')]:
-            cur_metrics = model.compute_loss_metrics(metrics={'mape': mape, 'mse': mse, 'r2': r2},
-                                                     X=X_cur, Y=Y_cur).assign(dataset=dataset_label)
+        # Store parameters values
+        for period in range(model.theta.shape[0]):
 
-            metrics = pd.concat([metrics, cur_metrics.assign(fold=i, stage='final')])
+            theta_dict = dict(zip(model.utility.features, list(model.theta[period].numpy())))
+            theta_dict['vot'] = compute_rr(theta_dict)
+            parameters_df = pd.concat([parameters_df,
+                                       pd.DataFrame({'parameter': theta_dict.keys(),
+                                                     'value': theta_dict.values(),
+                                                     'period': period,
+                                                     'fold': i,
+                                                     'group': 'utility'})])
+
+            if model.generation is not None and model.kappa is not None:
+                parameters_df = pd.concat([parameters_df,
+                                           pd.DataFrame({'parameter': model.generation.features,
+                                                         'value': list(model.kappa[period].numpy()),
+                                                         'period': period,
+                                                         'fold': i,
+                                                         'group': 'generation'})])
+
+        for X_cur, Y_cur, dataset_label in [(X_train, Y_train, 'training'), (X_val, Y_val, 'validation')]:
+            cur_metrics_df = model.compute_loss_metrics(metrics={'mape': mape, 'mse': mse, 'r2': r2_score},
+                                                        X=X_cur, Y=Y_cur).assign(dataset=dataset_label)
+
+            metrics_df = pd.concat([metrics_df, cur_metrics_df.assign(fold=i, stage='final')])
 
         # Add benchmark that is set as the average values of the observed measurements in the training set
-        metrics = pd.concat([metrics,
-                             compute_benchmark_metrics(metrics={'mape': mape, 'mse': mse, 'r2': r2},
-                                                       Y_ref=Y_train,Y=Y_train).assign(dataset='training',
-                                                                                     fold = i, stage = 'benchmark')])
-        metrics = pd.concat([metrics,
-                             compute_benchmark_metrics(metrics={'mape': mape, 'mse': mse, 'r2': r2},
-                                                       Y_ref=Y_train,Y=Y_val).assign(dataset='validation',
-                                                                                     fold = i, stage = 'benchmark')])
+        metrics_df = pd.concat([metrics_df,
+                                compute_benchmark_metrics(metrics={'mape': mape, 'mse': mse, 'r2': r2_score},
+                                                          Y_ref=Y_train, Y=Y_train).assign(dataset='training',
+                                                                                           fold = i, stage = 'benchmark')])
+        metrics_df = pd.concat([metrics_df,
+                                compute_benchmark_metrics(metrics={'mape': mape, 'mse': mse, 'r2': r2_score},
+                                                          Y_ref=Y_train, Y=Y_val).assign(dataset='validation',
+                                                                                         fold = i, stage = 'benchmark')])
 
         for optimizer in optimizers.values():
             for var in optimizer.variables():
@@ -2479,12 +2748,16 @@ def train_kfold(model: NESUELOGIT,
 
     os.remove(filepath)
 
-    metrics['n_splits'] = n_splits
-    metrics['model'] = model._model_id
+    metrics_df['n_splits'] = n_splits
+    metrics_df['model'] = model._model_id
 
-    #TODO: return generation and utility parameters, including rr, by kfold in a different pandas dataframe
+    parameters_df['n_splits'] = n_splits
+    parameters_df['model'] = model._model_id
 
-    return metrics.reset_index().drop('index', axis = 1)
+    metrics_df = metrics_df.reset_index().drop('index', axis=1)
+    parameters_df = parameters_df.reset_index().drop('index', axis=1)
+
+    return metrics_df, parameters_df
     # print(metrics.groupby(['dataset','component', 'metric'])['value'].aggregate(['mean','std']))
     # metrics.groupby(['dataset', 'component', 'metric'])['value'].aggregate({'mean': np.mean})
 

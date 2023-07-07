@@ -22,7 +22,7 @@ from nesuelogit.models import NESUELOGIT, ODParameters, UtilityParameters, BPR, 
     create_inference_model, compute_benchmark_metrics
 from nesuelogit.visualizations import plot_predictive_performance, plot_metrics_kfold, \
     plot_top_od_flows_periods, plot_utility_parameters_periods
-from nesuelogit.metrics import mse, btcg_mse, mnrmse, mape, r2, nrmse, zscore, nmse
+from nesuelogit.metrics import mse, btcg_mse, mnrmse, mape, r2_score, nrmse, zscore, nmse
 from nesuelogit.experiments import simulate_nesuelogit_data, simulate_features
 
 
@@ -68,10 +68,10 @@ _FEATURES_Z = ['tt_sd', 's']
 # features_sparse = ['k' + str(i) for i in np.arange(0, n_sparse_features)]
 # utility_function.add_sparse_features(Z=features_sparse)
 
-utility_function = UtilityParameters(features_Y=['traveltime'],
+utility_function = UtilityParameters(features_Y=['tt'],
                                      features_Z=_FEATURES_Z,
-                                     true_values={'traveltime': -1, 'tt_sd': -1.3, 's': -3},
-                                     #  true_values={'traveltime': -1, 'c': -6, 's': -3}
+                                     true_values={'tt': -1, 'tt_sd': -1.3, 's': -3},
+                                     #  true_values={'tt': -1, 'c': -6, 's': -3}
                                      dtype = tf.float32
                                      )
 
@@ -111,55 +111,59 @@ def create_tvodlulpe_model_siouxfalls(network, dtype=_DTYPE, n_periods=1, featur
                                       performance_function=None):
     # optimizer = tf.keras.optimizers.Adam(learning_rate=_LR)
 
-    utility_parameters = UtilityParameters(features_Y=['traveltime'],
+    utility_parameters = UtilityParameters(features_Y=['tt'],
                                            features_Z=features_Z,
-                                           # initial_values={'traveltime': 0, 'tt_sd': 0, 's': 0, 'psc_factor': 0,
+                                           # initial_values={'tt': 0, 'tt_sd': 0, 's': 0, 'psc_factor': 0,
                                            #                 'fixed_effect': np.zeros_like(network.links)},
-                                           true_values={'traveltime': -1, 'tt_sd': -1.3, 's': -3},
-                                           # true_values={'traveltime': [-1, -2], 'tt_sd': [-1.3, 2.6], 's': [-3, -4]},
+                                           true_values={'tt': -1, 'tt_sd': -1.3, 's': -3},
+                                           # true_values={'tt': [-1, -2], 'tt_sd': [-1.3, 2.6], 's': [-3, -4]},
                                            # trainables={'psc_factor': False, 'fixed_effect': False
-                                           #     , 'traveltime': True, 'tt_sd': True, 's': True},
+                                           #     , 'tt': True, 'tt_sd': True, 's': True},
                                            trainables={'psc_factor': False, 'fixed_effect': False
-                                               , 'traveltime': False, 'tt_sd': False, 's': False},
+                                               , 'tt': False, 'tt_sd': False, 's': False},
                                            time_varying=True,
                                            dtype=dtype
                                            )
 
-    # utility_parameters.random_initializer((-1,1),['traveltime','tt_sd','s'])
-    utility_parameters.random_initializer((0, 0), ['traveltime', 'tt_sd', 's'])
+    # utility_parameters.random_initializer((-1,1),['tt','tt_sd','s'])
+    utility_parameters.random_initializer((0, 0), ['tt', 'tt_sd', 's'])
 
     if performance_function is None:
         performance_function = create_bpr(network = network, dtype = dtype)
         # performance_function = create_mlp(network = network, dtype = dtype)
 
     od_parameters = ODParameters(key='od',
-                                 initial_values=network.q.flatten(),
-                                 true_values=network.q.flatten(),
+                                 initial_values= tf.stack([network.q.flatten(),
+                                                           0.8*network.q.flatten()]),
+                                 # true_values=network.q.flatten(),
                                  # historic_values={0: network.q.flatten()},
                                  # total_trips={0: np.sum(network.Q)},
                                  ods=network.ods,
+                                 # n_periods=1,
                                  n_periods=n_periods,
                                  time_varying=True,
-                                 trainable=True)
+                                 trainable=False)
 
-    generation_parameters = GenerationParameters(
-        features_Z=['income', 'population'],
-        initial_values={
-            # 'income': 0,
-            'fixed_effect': historic_g,
-        },
-        keys=['fixed_effect_od', 'fixed_effect_origin', 'fixed_effect_destination'],
-        # true_values={'income': 0, 'fixed_effect': np.zeros_like(network.links)},
-        # signs = {'income': '+','population': '+'},
-        trainables={
-            'fixed_effect': False, 'income': False, 'population': False,
-            'fixed_effect_origin': False, 'fixed_effect_destination': False, 'fixed_effect_od': True
-            # 'fixed_effect_origin': False, 'fixed_effect_destination': True, 'fixed_effect_od': False
-        },
-        pretrain_generation_weights=False,
-        historic_g=historic_g,
-        dtype=dtype
-    )
+    # generation_parameters = GenerationParameters(
+    #     features_Z=['income', 'population'],
+    #     initial_values={
+    #         # 'income': 0,
+    #         'fixed_effect': historic_g,
+    #     },
+    #     keys=['fixed_effect_od', 'fixed_effect_origin', 'fixed_effect_destination'],
+    #     # true_values={'income': 0, 'fixed_effect': np.zeros_like(network.links)},
+    #     # signs = {'income': '+','population': '+'},
+    #     trainables={
+    #         'fixed_effect': False, 'income': False, 'population': False,
+    #         'fixed_effect_origin': False, 'fixed_effect_destination': False, 'fixed_effect_od': True
+    #         # 'fixed_effect_origin': False, 'fixed_effect_destination': True, 'fixed_effect_od': False
+    #     },
+    #     pretrain_generation_weights=False,
+    #     historic_g=historic_g,
+    #     dtype=dtype
+    # )
+
+    generation_parameters = None
 
     model = NESUELOGIT(
         key='tvodlulpe',
@@ -183,19 +187,21 @@ node_data = pd.DataFrame({'key': [node.key for node in tntp_network.nodes],
                           'population': np.random.rand(len(tntp_network.nodes))
                           })
 
-# Generate data from multiple days. The value of the exogenous attributes varies between links but not between days (note: sd_x is the standard deviation relative to the true mean of traffic counts)
+# Generate data from multiple periods.
+# The value of the exogenous attributes varies between links but not between days
+# (note: sd_x is the standard deviation relative to the true mean of traffic counts)
 
-n_days = 300
+n_observations = 300
 
 df = simulate_features(links=tntp_network.links,
                        features_Z=_FEATURES_Z,
                        option='continuous',
                        time_variation=False,
                        range=(0, 1),
-                       n_days = n_days)
+                       n_days = n_observations)
 
 df['period'] = 0
-df.loc[df.timepoint >= int(2/3*n_days), 'period'] = 2
+df.loc[df.timepoint >= int(2/3*n_observations), 'period'] = 2
 
 df = add_period_id(df, period_feature='period')
 
@@ -208,31 +214,34 @@ X = get_design_tensor(Z=df[_FEATURES_Z + ['period_id']], n_links=n_links, n_time
 
 n_periods = len(np.unique(X[:, :, -1].numpy().flatten()))
 
-generated_trips = compute_generated_trips(q=isl.networks.denseQ(Q).flatten()[np.newaxis, :],
-                                          ods=tntp_network.ods)
+# generated_trips = compute_generated_trips(q=isl.networks.denseQ(Q).flatten()[np.newaxis, :],
+#                                           ods=tntp_network.ods)
 
-len(tntp_network.nodes)
-
-generation_factors = np.array([1,0.8])
+# generation_factors = np.array([1,0.8])
 # generation_factors = np.array([1,1])
 
 model, _ = create_tvodlulpe_model_siouxfalls(network=tntp_network,
                                              n_periods=n_periods,
-                                             historic_g=generation_factors[:, np.newaxis] * generated_trips)
+                                             # historic_g=generation_factors[:, np.newaxis] * generated_trips
+                                             )
 
+# Data from period 2 is generated with OD matrix that is 0.8 times the true OD matrix
 
 Y = simulate_nesuelogit_data(
     model = model,
     X = X,
     batch_size=1,
-    loss_metric=nmse,
+    # loss_metric=mse,
     max_epochs=1000,
-    optimizer = tf.keras.optimizers.legacy.Adam(learning_rate=5e-2),
-    threshold_relative_gap=1e-3,
+    optimizer = tf.keras.optimizers.legacy.Adam(learning_rate=1e-2),
+    threshold_relative_gap=1e-5,
     sd_x = 0.05,
     sd_t = 0.05,
     # coverage = 0.75
 )
+
+
+
 
 # Check if generation factors that are computed with observed link flows match the ground truth
 generation_factors = compute_generation_factors(period_column=X[:, :, -1, None].numpy(),
@@ -248,7 +257,7 @@ df = df.drop('period_id', axis = 1)
 #     reshape(-1,len(tntp_network.links), len(_FEATURES_Z + features_sparse )+1)
 
 output_file = tntp_network.key + '-link-data.csv'
-output_dir = Path('input/network-data/' + tntp_network.key + '/links')
+output_dir = Path('output/network-data/' + tntp_network.key + '/links')
 output_dir.mkdir(parents=True, exist_ok=True)
 
 df.to_csv(output_dir / output_file, index=False)

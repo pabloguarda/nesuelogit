@@ -34,11 +34,12 @@ from nesuelogit.models import NESUELOGIT, ODParameters, UtilityParameters, BPR, 
     create_inference_model, compute_benchmark_metrics, PolynomialLayer
 
 from nesuelogit.visualizations import plot_predictive_performance, plot_metrics_kfold, \
-    plot_top_od_flows_periods, plot_utility_parameters_periods, plot_mlp_performance_functions, plot_flow_vs_traveltime
+    plot_top_od_flows_periods, plot_utility_parameters_periods, plot_performance_functions, plot_flow_vs_traveltime,\
+    plot_flow_interaction_matrix, plot_parameters_kfold
 
-from nesuelogit.metrics import mse, btcg_mse, mnrmse, mape, r2, nrmse, zscore, z2score
+from nesuelogit.metrics import mse, btcg_mse, mnrmse, mape, r2_score, nrmse, zscore, z2score
 
-_PLOTS = True
+_PLOTS = False
 
 # # Seed for reproducibility
 _SEED = 2021
@@ -77,7 +78,14 @@ tntp_network = build_tntp_network(network_name=network_name)
 Q = isl.reader.read_tntp_od(network_name=network_name)
 tntp_network.load_OD(Q=Q)
 
-Q_historic = isl.factory.random_disturbance_Q(tntp_network.Q.copy(), sd=np.mean(tntp_network.Q) * 0.1)
+Q_true = [tntp_network.OD.Q_true, 0.8*tntp_network.OD.Q_true]
+q_true = tf.stack([tntp_network.OD.q_true.flatten(), 0.8*tntp_network.OD.q_true.flatten()], axis = 0)
+
+# Q_historic = isl.factory.random_disturbance_Q(tntp_network.Q.copy(), sd=np.mean(tntp_network.Q) * 0.1)
+
+Q_historic = [isl.factory.random_disturbance_Q(i.copy(), sd=np.mean(i) * 0.1) for i in Q_true]
+q_historic = [isl.networks.denseQ(i.copy()).flatten() for i in Q_historic]
+
 #
 # Paths
 load_k_shortest_paths(network=tntp_network, k=3, update_incidence_matrices=True)
@@ -161,9 +169,9 @@ _BATCH_SIZE = None
 _EQUILIBRIUM_STAGE = True
 _ALTERNATING_OPTIMIZATION = False
 _LR = {'learning': 1e-1, 'equilibrium': 1e-1}
-_EPOCHS = {'learning': 20, 'equilibrium': 10}
+# _EPOCHS = {'learning': 20, 'equilibrium': 10}
 # _BATCH_SIZE = None
-# _EPOCHS = {'learning': 2, 'equilibrium': 1}
+_EPOCHS = {'learning': 10, 'equilibrium': 5}
 _EPOCHS_PRINT_INTERVAL = {'learning': 1, 'equilibrium': 1}
 _XTICKS_SPACING = 5
 
@@ -198,7 +206,7 @@ _OPTIMIZERS = {'learning': tf.keras.optimizers.legacy.Adam(learning_rate=_LR['le
                'equilibrium': tf.keras.optimizers.legacy.Adam(learning_rate=_LR['equilibrium'])
                }
 
-_RELATIVE_GAP = 1e-3
+_RELATIVE_GAP = 1e-0
 
 _MOMENTUM_EQUILIBRIUM = 1
 
@@ -216,6 +224,7 @@ run_model = dict.fromkeys(list_models, False)
 
 # run_model['equilibrium'] = True
 # run_model['odlulpe'] = True
+# run_model['tvodlulpe'] = True
 run_model['tvodlulpe'] = True
 # run_model['tvodlulpe-kfold'] = True
 # run_model['tvodlulpe-outofsample'] = True
@@ -225,28 +234,32 @@ models = {}
 train_results_dfs = {}
 val_results_dfs = {}
 
-def create_mlp(network, dtype =_DTYPE):
+def create_mlp(network, homogenous = True, diagonal = False, symmetric = False, pretrain = False,
+               poly_order = 4, alpha_prior = 1, beta_prior = 1, dtype =_DTYPE, max_traveltime_factor = None):
     return MLP(n_links=len(network.links),
                free_flow_traveltimes=[link.bpr.tf for link in network.links],
                capacities=[link.bpr.k for link in network.links],
                kernel_constraint=KernelConstraint(
                    link_keys=[(link.key[0], link.key[1]) for link in network.links],
-                   # adjacency_constraint=True,
                    dtype=dtype,
                    capacities=[link.bpr.k for link in network.links],
                    free_flow_traveltimes=[link.bpr.tf for link in network.links],
-                   # diagonal=True,
-                   # homogenous=True
+                   adjacency_constraint=True,
+                   # initial_values = np.eye(tntp_network.get_n_links())
+                   diagonal= diagonal,
+                   homogenous=homogenous,
+                   symmetric = symmetric,
                ),
                trainable = True,
-               polynomial_layer= PolynomialLayer(poly_order=8,
+               polynomial_layer= PolynomialLayer(poly_order=poly_order,
                                                  trainable = True,
-                                                 pretrain_weights=True,
-                                                 alpha_prior = 1, beta_prior=2,
-                                                 # kernel_constraint=tf.keras.constraints.NonNeg(),
+                                                 pretrain_weights=pretrain,
+                                                 alpha_prior = alpha_prior, beta_prior=beta_prior,
+                                                 kernel_constraint=tf.keras.constraints.NonNeg(),
                                                  ),
-               alpha_relu=1,
+               alpha_relu = 0.1,
                depth=1,
+               max_traveltime_factor = max_traveltime_factor,
                dtype=dtype)
 
 def create_bpr(network, dtype =_DTYPE):
@@ -259,61 +272,72 @@ def create_bpr(network, dtype =_DTYPE):
                trainables={'alpha': True, 'beta':True},
                capacities = [link.bpr.k for link in network.links],
                free_flow_traveltimes =[link.bpr.tf for link in network.links],
-               dtype = dtype
+               dtype = dtype,
+               # max_traveltime_factor = 0.1
                )
 
 def create_tvodlulpe_model_siouxfalls(network, dtype=_DTYPE, n_periods=1, features_Z=_FEATURES_Z, historic_g=None,
-                                      performance_function=None):
+                                      performance_function=None, utility_parameters = None, od_parameters = None,
+                                      generation: bool = True, utility: bool = False):
     # optimizer = tf.keras.optimizers.Adam(learning_rate=_LR)
 
-    utility_parameters = UtilityParameters(features_Y=['tt'],
-                                           features_Z=features_Z,
-                                           initial_values={'tt': 0, 'tt_sd': 0, 's': 0, 'psc_factor': 0,
-                                                           'fixed_effect': np.zeros_like(network.links)},
-                                           true_values={'tt': -1, 'tt_sd': -1.3, 's': -3},
-                                           # trainables={'psc_factor': False, 'fixed_effect': False
-                                           #     , 'traveltime': True, 'tt_sd': True, 's': True},
-                                           trainables={'psc_factor': False, 'fixed_effect': False
-                                               , 'tt': False, 'tt_sd': False, 's': False},
-                                           time_varying=True,
-                                           dtype=dtype
-                                           )
+    if utility_parameters is None:
+        utility_parameters = UtilityParameters(features_Y=['tt'],
+                                               features_Z=features_Z,
+                                               # initial_values={'tt': 0, 'tt_sd': 0, 's': 0, 'psc_factor': 0,
+                                               #                 'fixed_effect': np.zeros_like(network.links)},
+                                               initial_values={'tt': -1, 'tt_sd': -1.3, 's': -3, 'psc_factor': 0,
+                                                               'fixed_effect': np.zeros_like(network.links)},
+                                               true_values={'tt': -1, 'tt_sd': -1.3, 's': -3},
+                                               # trainables={'psc_factor': False, 'fixed_effect': False
+                                               #     , 'tt': True, 'tt_sd': True, 's': True},
+                                               trainables={'tt': utility, 'tt_sd': False, 's': False,
+                                                           'psc_factor': False, 'fixed_effect': False},
+                                               time_varying=True,
+                                               dtype=dtype
+                                               )
 
     # utility_parameters.random_initializer((-1,1),['tt','tt_sd','s'])
-    utility_parameters.random_initializer((0, 0), ['tt', 'tt_sd', 's'])
+    # utility_parameters.random_initializer((0, 0), ['tt', 'tt_sd', 's'])
 
     if performance_function is None:
         # performance_function = create_bpr(network = network, dtype = dtype)
         performance_function = create_mlp(network = network, dtype = dtype)
 
-    od_parameters = ODParameters(key='od',
-                                 initial_values=network.q.flatten(),
-                                 true_values=network.q.flatten(),
+    generation_parameters = None
+
+    if generation:
+        generation_parameters = GenerationParameters(
+            features_Z=['income', 'population'],
+            initial_values={
+                # 'income': 0,
+                'fixed_effect': historic_g,
+            },
+            keys=['fixed_effect_od', 'fixed_effect_origin', 'fixed_effect_destination'],
+            # true_values={'income': 0, 'fixed_effect': np.zeros_like(network.links)},
+            # signs = {'income': '+','population': '+'},
+            trainables={
+                'fixed_effect': False, 'income': False, 'population': False,
+                'fixed_effect_origin': False, 'fixed_effect_destination': False, 'fixed_effect_od': True
+                # 'fixed_effect_origin': False, 'fixed_effect_destination': True, 'fixed_effect_od': False
+            },
+            pretrain_generation_weights=False,
+            historic_g= historic_g,
+            dtype=dtype
+        )
+
+    if od_parameters is None:
+        od_parameters = ODParameters(key='od',
+                                 # initial_values=network.q.flatten(),
+                                 # true_values=network.q.flatten(),
+                                 initial_values = tf.stack(q_historic),
+                                 historic_values={0: q_historic[0], 1:q_historic[1]},
                                  # historic_values={0: network.q.flatten()},
                                  # total_trips={0: np.sum(network.Q)},
                                  ods=network.ods,
                                  n_periods=n_periods,
                                  time_varying=True,
-                                 trainable=True)
-
-    generation_parameters = GenerationParameters(
-        features_Z=['income', 'population'],
-        initial_values={
-            # 'income': 0,
-            'fixed_effect': historic_g,
-        },
-        keys=['fixed_effect_od', 'fixed_effect_origin', 'fixed_effect_destination'],
-        # true_values={'income': 0, 'fixed_effect': np.zeros_like(network.links)},
-        # signs = {'income': '+','population': '+'},
-        trainables={
-            'fixed_effect': False, 'income': False, 'population': False,
-            # 'fixed_effect_origin': False, 'fixed_effect_destination': False, 'fixed_effect_od': True
-            'fixed_effect_origin': False, 'fixed_effect_destination': True, 'fixed_effect_od': False
-        },
-        pretrain_generation_weights=False,
-        historic_g=historic_g,
-        dtype=dtype
-    )
+                                 trainable= not generation)
 
     model = NESUELOGIT(
         key='tvodlulpe',
@@ -483,6 +507,7 @@ if run_model['odlulpe']:
         loss_weights=dict(_LOSS_WEIGHTS),
         loss_metric=_LOSS_METRIC,
         momentum_equilibrium=_MOMENTUM_EQUILIBRIUM,
+        pretrain_link_flows=True,
         alternating_optimization=_ALTERNATING_OPTIMIZATION,
         equilibrium_stage=_EQUILIBRIUM_STAGE,
         threshold_relative_gap=_RELATIVE_GAP,
@@ -557,10 +582,10 @@ if run_model['odlulpe']:
                                              model=models['odlulpe'],
                                              metric=mse))
 
-    metrics_df = models['odlulpe'].compute_loss_metrics(metrics={'mape': mape, 'mse': mse, 'r2': r2},
+    metrics_df = models['odlulpe'].compute_loss_metrics(metrics={'mape': mape, 'mse': mse, 'r2': r2_score},
                                                         X=X_train, Y=Y_train).assign(dataset='training')
     metrics_df = pd.concat([metrics_df,
-                            models['odlulpe'].compute_loss_metrics(metrics={'mape': mape, 'mse': mse, 'r2': r2},
+                            models['odlulpe'].compute_loss_metrics(metrics={'mape': mape, 'mse': mse, 'r2': r2_score},
                                                                    X=X_val, Y=Y_val).assign(dataset='validation')])
 
     with pd.option_context('display.float_format', '{:0.2g}'.format):
@@ -576,13 +601,33 @@ if run_model['tvodlulpe']:
     generation_factors = compute_generation_factors(period_column=XT[:, :, -1, None].numpy(),
                                                     flow_column=YT[:, :, 1, None].numpy(), reference_period=0)
 
-    generated_trips = compute_generated_trips(q=isl.networks.denseQ(Q_historic).flatten()[np.newaxis, :],
-                                              ods=tntp_network.ods)
+    generated_trips = compute_generated_trips(q=tf.stack(q_historic), ods=tntp_network.ods)
 
     models['tvodlulpe'], _ = create_tvodlulpe_model_siouxfalls(
         n_periods=n_periods, network=tntp_network,
-        historic_g= generation_factors.values[:,np.newaxis]*generated_trips
-        # historic_g=generated_trips
+        generation=True,
+        historic_g=generated_trips,
+        utility_parameters=UtilityParameters(features_Y=['tt'],
+                                             features_Z=_FEATURES_Z,
+                                             initial_values={'tt': 0, 'tt_sd': 0, 's': 0, 'psc_factor': 0,
+                                                             'fixed_effect': np.zeros_like(tntp_network.links)},
+                                             time_varying=True,
+                                             dtype=_DTYPE,
+                                             trainables={'tt': True, 'tt_sd': True, 's': True,
+                                                         'psc_factor': False, 'fixed_effect': False},
+                                             ),
+        performance_function=create_mlp(network=tntp_network, diagonal=False, homogenous=False, poly_order=4, symmetric = True,
+                                        dtype=_DTYPE),
+        # performance_function=create_bpr(network=tntp_network, dtype=_DTYPE),
+        od_parameters=ODParameters(key='od',
+                                   # initial_values= generation_factors.values[:,np.newaxis]*tntp_network.q.flatten(),
+                                   initial_values = tf.stack(q_historic),
+                                   historic_values={0: q_historic[0], 1: q_historic[1]},
+                                   # historic_values = tf.stack(q_historic),
+                                   ods=tntp_network.ods,
+                                   n_periods=n_periods,
+                                   time_varying=True,
+                                   trainable=True),
     )
 
     train_results_dfs['tvodlulpe'], val_results_dfs['tvodlulpe'] = models['tvodlulpe'].fit(
@@ -596,7 +641,9 @@ if run_model['tvodlulpe']:
         loss_weights=_LOSS_WEIGHTS,
         loss_metric=_LOSS_METRIC,
         equilibrium_stage=_EQUILIBRIUM_STAGE,
+        alternating_optimization = _ALTERNATING_OPTIMIZATION,
         momentum_equilibrium=_MOMENTUM_EQUILIBRIUM,
+        pretrain_link_flows=True,
         threshold_relative_gap=_RELATIVE_GAP,
         epochs_print_interval=_EPOCHS_PRINT_INTERVAL,
         epochs=_EPOCHS)
@@ -613,26 +660,6 @@ if run_model['tvodlulpe']:
     #                             epochs=0
     #                             )
 
-    # MLP weights
-    mlp_weights = models['tvodlulpe'].performance_function.weights
-
-    link_flow_interaction_matrix = mlp_weights[1].numpy()
-
-    matrix_df = pd.DataFrame({'link_1': pd.Series([], dtype=int),
-                              'link_2': pd.Series([], dtype=int),
-                              'weight': pd.Series([], dtype=float)})
-
-    # rows, cols = link_flow_interaction_matrix.shape
-    #
-    # counter = 0
-    # for link_1 in range(0, rows):
-    #     for link_2 in range(0, cols):
-    #         matrix_df.loc[counter] = [int(link_1 + 1), int(link_2 + 1), Q[(origin, destination)]]
-    #         counter += 1
-    #
-    # od_pivot_df = od_df.pivot_table(index='origin', columns='destination', values='trips')
-    #
-    # sns.heatmap(od_pivot_df, linewidth=0.5, cmap="Blues", vmin=vmin, vmax=vmax, ax=axi)
 
     if _PLOTS:
 
@@ -642,53 +669,57 @@ if run_model['tvodlulpe']:
                                 observed_traveltime=Y[:, :, 0],
                                 observed_flow= Y[:,:,1]
                                 )
-        # plt.show()
+        plt.show()
 
-        plot_mlp_performance_functions(model = models['tvodlulpe'],
-                                       network = tntp_network,
-                                       marginal = False,
-                                       alpha = 1,
-                                       beta = 2
-                                       # selected_links = np.random.choice(range(tntp_network.get_n_links()), 10, replace=False)
-                                       )
+        plot_performance_functions(model = models['tvodlulpe'],
+                                   network = tntp_network,
+                                   marginal = False,
+                                   alpha = 1,
+                                   beta = 2
+                                   # selected_links = np.random.choice(range(tntp_network.get_n_links()), 10, replace=False)
+                                   )
+
+        plt.show()
 
         # plt.show()
 
         selected_links = np.random.choice(range(tntp_network.get_n_links()), 10, replace=False)
 
         # Plot with bpr used the priors of the BPR parameters used to pretrain the MLP
-        plot_mlp_performance_functions(model=models['tvodlulpe'],
-                                       network=tntp_network,
-                                       marginal=False,
-                                       alpha=1,
-                                       beta=2,
-                                       selected_links = selected_links,
-                                       palette = sns.color_palette("hls", len(selected_links))
-                                       )
+        plot_performance_functions(model=models['tvodlulpe'],
+                                   network=tntp_network,
+                                   marginal=False,
+                                   alpha=1,
+                                   beta=2,
+                                   selected_links = selected_links,
+                                   palette = sns.color_palette("hls", len(selected_links))
+                                   )
 
         plt.show()
 
 
-        plot_mlp_performance_functions(model=models['tvodlulpe'],
-                                       network=tntp_network,
-                                       marginal=True,
-                                       alpha=1,
-                                       beta=2,
-                                       selected_links = selected_links
-                                       )
+        plot_performance_functions(model=models['tvodlulpe'],
+                                   network=tntp_network,
+                                   marginal=True,
+                                   alpha=1,
+                                   beta=2,
+                                   selected_links = selected_links
+                                   )
 
         plt.show()
 
-        # # This shows that the model is able to learn the true BPR function with a polynonomial kernel
-        # plot_performance_functions(model=models['tvodlulpe'],
-        #                            network=tntp_network,
-        #                            marginal=True,
-        #                            alpha=0.15,
-        #                            beta=4,
-        #                            selected_links = selected_links
-        #                            )
-        #
-        # plt.show()
+        # MLP weights
+
+        if models['tvodlulpe'].performance_function.kernel_constraint.homogenous:
+            flow_interaction_matrix = models['tvodlulpe'].performance_function.model.layers[0].parameter.numpy(),
+        else:
+            flow_interaction_matrix = models['tvodlulpe'].performance_function.weights[1].numpy()
+
+        plot_flow_interaction_matrix(
+            flow_interaction_matrix = flow_interaction_matrix,
+            masking_matrix=models['tvodlulpe'].performance_function.kernel_constraint.initial_values.numpy()
+        )
+        plt.show()
 
         # Plot heatmap with flows of top od pairs
         plot_top_od_flows_periods(models['tvodlulpe'], period_keys=period_keys, period_feature=period_feature, top_k=20,
@@ -743,19 +774,21 @@ if run_model['tvodlulpe']:
 
         plt.show()
 
-        Qs = {'true': tntp_network.OD.Q_true,
-              # 'historic': Q_historic,
-              'estimated': tf.sparse.to_dense(models['tvodlulpe'].Q).numpy()}
+        estimated_Q = models['tvodlulpe'].Q.numpy()
 
-        plot_heatmap_demands(Qs=Qs, vmin=np.min(Qs['true']), vmax=np.max(Qs['true']), subplots_dims=(1, len(Qs.keys())),
-                             figsize=(4*len(Qs.keys()), 4))
+        for period in range(estimated_Q.shape[0]):
+            Qs = {'true': tntp_network.OD.Q_true, 'estimated': estimated_Q[period]}  # 'historic': Q_historic,
+            plot_heatmap_demands(Qs=Qs, vmin=np.min(Qs['true']), vmax=np.max(Qs['true']), subplots_dims=(1, len(Qs.keys())),
+                                 figsize=(4*len(Qs.keys()), 4))
 
         plt.show()
 
     print(f"theta = "
           f"{dict(zip(models['tvodlulpe'].utility.true_values.keys(), list(np.mean(models['tvodlulpe'].theta.numpy(), axis=0))))}")
-    print(f"kappa= "
-          f"{dict(zip(models['tvodlulpe'].generation.features, list(np.mean(models['tvodlulpe'].kappa.numpy(), axis=0))))}")
+
+    if models['tvodlulpe'].generation is not None:
+        print(f"kappa= "
+              f"{dict(zip(models['tvodlulpe'].generation.features, list(np.mean(models['tvodlulpe'].kappa.numpy(), axis=0))))}")
 
     if models['tvodlulpe'].performance_function.type == 'bpr':
         print(f"alpha = {np.mean(models['tvodlulpe'].performance_function.alpha): 0.2f}, "
@@ -766,16 +799,16 @@ if run_model['tvodlulpe']:
 
     print(f"Avg observed OD: {np.mean(np.abs(tntp_network.q.flatten())): 0.2f}")
 
-    metrics_df = models['tvodlulpe'].compute_loss_metrics(metrics={'mape': mape, 'mse': mse, 'r2': r2},
+    metrics_df = models['tvodlulpe'].compute_loss_metrics(metrics={'mape': mape, 'mse': mse, 'r2': r2_score},
                                                           X=XT_train, Y=YT_train).assign(dataset='training')
 
     # metrics_df = pd.concat([metrics_df,
     #                      compute_benchmark_metrics(metrics={'mape': mape, 'mse': mse, 'r2': r2},
     #                                                Y_ref=Y_train, Y=Y_train).assign(dataset='training', stage='benchmark')])
     metrics_df = pd.concat([metrics_df,
-                            models['tvodlulpe'].compute_loss_metrics(metrics={'mape': mape, 'mse': mse, 'r2': r2},
+                            models['tvodlulpe'].compute_loss_metrics(metrics={'mape': mape, 'mse': mse, 'r2': r2_score},
                                                                      X=XT_val, Y=YT_val).assign(dataset='validation'),
-                            compute_benchmark_metrics(metrics={'mape': mape, 'mse': mse, 'r2': r2}, Y_ref=YT_train,
+                            compute_benchmark_metrics(metrics={'mape': mape, 'mse': mse, 'r2': r2_score}, Y_ref=YT_train,
                                                       Y=YT_val).assign(
                                 dataset='benchmark')
                             ])
@@ -798,13 +831,12 @@ if run_model['tvodlulpe-kfold']:
 
     n_periods = len(np.unique(X[:, :, -1].numpy().flatten()))
 
-    generated_trips = compute_generated_trips(q=isl.networks.denseQ(Q_historic).flatten()[np.newaxis, :],
-                                              ods=tntp_network.ods)
+    generated_trips = compute_generated_trips(q=tf.stack(q_historic), ods=tntp_network.ods)
 
     model, _ = create_tvodlulpe_model_siouxfalls(
         n_periods=n_periods, network=tntp_network, historic_g=generated_trips)
 
-    metrics_kfold_df = train_kfold(
+    metrics_kfold_df, parameters_kfold_df = train_kfold(
         n_splits=2,
         random_state=_SEED,
         model=model,
@@ -816,6 +848,7 @@ if run_model['tvodlulpe-kfold']:
         loss_metric=_LOSS_METRIC,
         equilibrium_stage=_EQUILIBRIUM_STAGE,
         momentum_equilibrium=_MOMENTUM_EQUILIBRIUM,
+        pretrain_link_flows=True,
         threshold_relative_gap=_RELATIVE_GAP,
         # batch_size=1,
         batch_size=_BATCH_SIZE,
@@ -825,15 +858,31 @@ if run_model['tvodlulpe-kfold']:
 
     )
 
-    metrics_kfold_df.to_csv(f"./output/experiments/{datetime.now().strftime('%y%m%d%H%M%S')}_kfold_{network_name}.csv")
+    # TODO: Remap period to hour, put legend outside, add title to distinguish between utility and generation parameters
 
-    # TODO: Add coefficient of variation and save experiments results, compute percentage reduction between final and initial
+    parameters_kfold_df['hour'] = parameters_kfold_df.period.replace({v: k for k, v in model.period_dict.items()}). \
+        replace(dict(zip(period_keys.period_id, period_keys.hour)))
+
+    parameters_kfold_df['parameter'] = parameters_kfold_df['parameter'].replace({'tt': 'travel time'})
+
+    plot_parameters_kfold(df = parameters_kfold_df)
+
+    plt.show()
+
+    metrics_kfold_df.to_csv(f"./output/experiments/{datetime.now().strftime('%y%m%d%H%M%S')}_metrics_kfold_{network_name}.csv")
+
+    parameters_kfold_df.to_csv(f"./output/experiments/{datetime.now().strftime('%y%m%d%H%M%S')}_parameters_kfold_{network_name}.csv")
+
     with pd.option_context('display.float_format', '{:0.2g}'.format):
         # print(metrics_kfold_df[metrics_kfold_df.component.isin(['flow','traveltime'])].\
         #       groupby(['dataset', 'component', 'metric', 'stage'])['value'].\
         #       aggregate(['mean', 'std']))
         print(metrics_kfold_df. \
               groupby(['dataset', 'component', 'metric', 'stage'])['value']. \
+              aggregate(['mean', 'std']))
+
+        print(parameters_kfold_df. \
+              groupby(['parameter', 'period'])['value']. \
               aggregate(['mean', 'std']))
 
     # metrics_kfold_df = pd.read_csv(f"./output/experiments/{230525002028}_kfold_{network_name}.csv")
@@ -886,13 +935,14 @@ if run_model['tvodlulpe-outofsample']:
         loss_metric=_LOSS_METRIC,
         equilibrium_stage=_EQUILIBRIUM_STAGE,
         momentum_equilibrium=_MOMENTUM_EQUILIBRIUM,
+        pretrain_link_flows=True,
         threshold_relative_gap=_RELATIVE_GAP,
         epochs_print_interval=_EPOCHS_PRINT_INTERVAL,
         # epochs=_EPOCHS
         epochs={'learning': 10, 'equilibrium': 5}
     )
 
-    print(reference_model.compute_loss_metrics(metrics={'mape': mape, 'mse': mse, 'r2': r2}, X=XT_train, Y=YT_train))
+    print(reference_model.compute_loss_metrics(metrics={'mape': mape, 'mse': mse, 'r2': r2_score}, X=XT_train, Y=YT_train))
 
     model = create_inference_model(creation_method=create_tvodlulpe_model_siouxfalls, reference_model=reference_model)
 
@@ -909,7 +959,7 @@ if run_model['tvodlulpe-outofsample']:
                   epochs_print_interval=_EPOCHS_PRINT_INTERVAL,
                   epochs=4)
 
-    print(model.compute_loss_metrics(metrics={'mape': mape, 'mse': mse, 'r2': r2}, X=XT_val, Y=YT_val))
+    print(model.compute_loss_metrics(metrics={'mape': mape, 'mse': mse, 'r2': r2_score}, X=XT_val, Y=YT_val))
 
     # Bad model because it has not been trained
     other_model = create_tvodlulpe_model_siouxfalls(
@@ -919,7 +969,7 @@ if run_model['tvodlulpe-outofsample']:
     other_model.setup_period_ids(X_train=XT_val, node_data=node_data)
     # other_model.forward(XT_val)
 
-    print(other_model.compute_loss_metrics(metrics={'mape': mape, 'mse': mse, 'r2': r2}, X=XT_val, Y=YT_val))
+    print(other_model.compute_loss_metrics(metrics={'mape': mape, 'mse': mse, 'r2': r2_score}, X=XT_val, Y=YT_val))
 
     # TODO: Build a beenchmark model here
 
