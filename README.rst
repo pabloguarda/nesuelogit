@@ -12,7 +12,7 @@ Development Setup
 5. Install dependencies: ``conda env update -f nesuelogit-cpu.yml`` or ``conda env update -f nesuelogit-gpu.yml`` to
 train models with gpu.
 
-This repository is currently compatible with Python 3.8.x and it requires a Macbook with Apple Silicon chip.
+This repository is currently compatible with Python 3.8.x. To setup and it requires a Macbook with Apple Silicon chip.
 
 
 # To enable gpu training: conda env update -f nesuelogit-gpu.yml --prune
