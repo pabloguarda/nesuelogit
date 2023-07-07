@@ -9,10 +9,6 @@ Development Setup
 2. Download and install Anaconda for 64-Bit (M1): https://docs.anaconda.com/anaconda/install/index.html
 3. Create virtual environment: ``conda create -n nesuelogit``
 4. Activate environment: ``conda activate nesuelogit``
-5. Install dependencies: ``conda env update -f nesuelogit-cpu.yml`` or ``conda env update -f nesuelogit-gpu.yml`` to
-train models with gpu.
+5. Install dependencies: ``conda env update -f nesuelogit-cpu-intel.yml``. You can also perform the installation with the yml files ``nesuelogit-silicon-cpu.yml`` or ``nesuelogit-silicon-gpu.yml`` to train models with cpu and gpu wtih Apple Silicon.
 
-This repository is currently compatible with Python 3.8.x. To setup and it requires a Macbook with Apple Silicon chip.
-
-
-# To enable gpu training: conda env update -f nesuelogit-gpu.yml --prune
+This repository is currently compatible with Python 3.8.x.
