@@ -5,9 +5,11 @@ input/private
 /output/tables/*
 /output/models/*
 /output/experiments/*
+/output/figures/*
 !output/tables/.gitkeep
 
 /examples/notebooks/backup/
+/examples/notebooks/output/
 
 /input/network-data/fresno/links/backup/
 /output/network-data/fresno/links/*
@@ -159,5 +161,3 @@ cython_debug/
 
 # Pycharm
 .idea/
-examples/notebooks/backup/experiments-siouxfalls-bpr-kfold5.ipynb
-examples/notebooks/backup/230529-estimation-fresno-destination-effects-ode.ipynb
