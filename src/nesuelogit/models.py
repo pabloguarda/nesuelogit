@@ -846,16 +846,21 @@ class MLP(PerformanceFunction):
         if self.polynomial_layer is not None and not self.polynomial_layer.built:
             self.polynomial_layer.build(n_links = self.n_links)
 
-    def regularizer(self):
+    def regularizer(self, regularizer):
+
+        ''' Regularizer for the non-diagonal component of the kernel matrix'''
+
+        if regularizer is None:
+            regularizer = tf.keras.regularizers.L1(1)
 
         regularization_loss = 0
 
-        if not self.kernel_constraint.diagonal:
-            kernel = self.model.trainable_variables[0]
+        if not self.kernel_constraint.diagonal and not self.kernel_constraint.homogenous:
+            kernel = self.model.trainable_variables[-1]
+            regularization_loss = regularizer(kernel - tf.eye(kernel.shape[0]) * tf.linalg.diag_part(kernel))
 
-            regularization_loss = regularization_loss * \
-                                  tf.math.abs(tf.reduce_sum(
-                                      kernel - tf.eye(kernel.shape[0]) * tf.linalg.diag_part(kernel)))
+            # regularization_loss = tf.math.abs(tf.reduce_sum(
+            #                           kernel - tf.eye(kernel.shape[0]) * tf.linalg.diag_part(kernel)))
 
         return regularization_loss
 
@@ -1205,6 +1210,26 @@ class NESUELOGIT(PESUELOGIT):
                                         k_threshold = k_threshold
                                         )
 
+    def compute_regularization_loss(self, lambda_vals):
+
+        loss = {}
+
+        if self.performance_function.type == 'mlp' and lambda_vals['regularizer_kernel']>0:
+            regularizer = tf.keras.regularizers.L1(lambda_vals['regularizer_kernel'])
+            loss['regularizer_kernel'] = self.performance_function.regularizer(regularizer)
+
+        # Only for model that has a generation stage
+        if lambda_vals['regularizer_utility_ods']>0 and self.kappa is not None:
+
+            regularizer = tf.keras.regularizers.L1(lambda_vals['regularizer_utility_ods'])
+            loss['regularizer_utility_ods'] = regularizer(self.utility_ods)
+
+        if lambda_vals['regularizer_od'] > 0:
+            regularizer = tf.keras.regularizers.L2(lambda_vals['regularizer_od'])
+            loss['regularizer_od'] = regularizer(self.q)
+
+        return loss
+
     def loss_function(self,
                       X,
                       Y=None,
@@ -1233,7 +1258,11 @@ class NESUELOGIT(PESUELOGIT):
             loss_metric = mse
 
         lambdas_vals = {'traveltime': 0.0, 'od': 0.0, 'theta': 0.0, 'flow': 0.0, 'equilibrium': 0.0,
-                        'bpr': 0, 'ntrips': 0, 'prop_od': 0, 'mlp_regularizer': 0}
+                        'bpr': 0, 'ntrips': 0, 'prop_od': 0}
+
+        regularization_vals = {'regularizer_kernel': 0, 'regularizer_utility_ods': 0, 'regularizer_od': 0,}
+
+        lambdas_vals = {**lambdas_vals, **regularization_vals}
 
         assert set(lambdas.keys()).issubset(lambdas_vals.keys()), 'Invalid key in loss_weights attribute'
 
@@ -1242,15 +1271,18 @@ class NESUELOGIT(PESUELOGIT):
 
         loss = dict.fromkeys(list(lambdas_vals.keys()) + ['total'], tf.constant(0, dtype=self.dtype))
 
-        if self.performance_function.type == 'mlp' and lambdas_vals['mlp_regularizer']>0:
-            loss['mlp_regularizer'] = self.performance_function.regularizer()
+        # Only regularize tgodlulpe model
+        if self.key == 'tvgodlulpe':
+            self.regularization_loss = self.compute_regularization_loss(lambdas_vals)
+            loss = {**loss, **self.regularization_loss}
+
 
         # if self.od.features_generation:
         #     lambdas_vals['generation'] = 1e2
         #     loss['generation'] = mse(actual = compute_generated_trips(historic_od, ods = self.od.ods),
         #                              predicted = compute_generated_trips(self.q, ods = self.od.ods))
 
-        # Equilibrium loss 
+        # Equilibrium loss
         loss['equilibrium'] = self.equilibrium_loss(loss_metric = loss_metric,
                                                     Y = Y,
                                                     input_flow = self._input_flow,
@@ -1663,7 +1695,7 @@ class NESUELOGIT(PESUELOGIT):
         return tf.nn.relu(self.mask_generation_nodes(g))
 
     @property
-    def utility_od_pairs(self):
+    def utility_ods(self):
         '''
         Using origin and destination specific effects can decrease the number of parameters but it may ncrease training
         time due to the 'take' operation.
@@ -1701,7 +1733,7 @@ class NESUELOGIT(PESUELOGIT):
         indices = L_sparse.indices
 
         # Utility of od-pairs (TODO: add destination specific features)
-        v = self.utility_od_pairs
+        v = self.utility_ods
 
         V = tf.sparse.SparseTensor(indices=indices,
                                    values=tf.reshape(v, [-1]),
@@ -2126,6 +2158,11 @@ class NESUELOGIT(PESUELOGIT):
 
         # self._filepath_weights = f'output/models/{self.key}_{self.network.key}.h5'
         # self.save_weights(self._filepath_weights)
+
+    # def compute_relative_gap(self):
+    #
+    #     relative_gap = (
+    #             tf.norm(link_flow - self.flows, 1) / (normalizer * tf.norm(self.flows, 1))).numpy()
 
     def fit(self,
             X_train: tf.Tensor,
@@ -2704,7 +2741,9 @@ def train_kfold(model: NESUELOGIT,
         # Compute metrics_df after training
         model.load_weights(filepath)
 
-        model.fit(X_train, Y_train, X_val, Y_val, *args, **kwargs)
+        train_results_df, val_results_df = model.fit(X_train, Y_train, X_val, Y_val, *args, **kwargs)
+        relative_gap = train_results_df['relative_gap'].values[-1]
+
 
         # Store parameters values
         for period in range(model.theta.shape[0]):
@@ -2742,6 +2781,8 @@ def train_kfold(model: NESUELOGIT,
                                                           Y_ref=Y_train, Y=Y_val).assign(dataset='validation',
                                                                                          fold = i, stage = 'benchmark')])
 
+        metrics_df['relative_gap'] = relative_gap
+
         for optimizer in optimizers.values():
             for var in optimizer.variables():
                 var.assign(tf.zeros_like(var))
@@ -2750,6 +2791,7 @@ def train_kfold(model: NESUELOGIT,
 
     metrics_df['n_splits'] = n_splits
     metrics_df['model'] = model._model_id
+
 
     parameters_df['n_splits'] = n_splits
     parameters_df['model'] = model._model_id
@@ -2762,6 +2804,81 @@ def train_kfold(model: NESUELOGIT,
     # metrics.groupby(['dataset', 'component', 'metric'])['value'].aggregate({'mean': np.mean})
 
     # print("%0.2f accuracy with a standard deviation of %0.2f" % (scores.mean(), scores.std()))
+
+
+def regularization_kfold(target_metric: str, target_component: str, loss_weights: List[Dict], **kwargs):
+
+    """
+
+    :param target_metric:
+    :param target_component:
+    :param loss_weights:
+    :param kwargs:
+    :return: dataframe with the average target metric for each loss component and metrics for the optimal
+    regulatization weights
+    """
+
+    min_loss = float('inf')
+    min_idx = None
+
+    metrics_kfold_dfs = []
+    parameters_kfold_dfs = []
+    metrics_dfs = pd.DataFrame({})
+
+    kwargs['model'].build()
+    # Create folder kfold if it does not exist
+    filepath = f"output/models/kfold/{kwargs['model']._model_id + '_regularization'}.h5"
+    kwargs['model'].save_weights(filepath)
+
+    for i, weights in enumerate(loss_weights):
+        kwargs['loss_weights'] = weights
+        kwargs['model'].load_weights(filepath)
+
+        print(f"\nReplicate: {i+1}/{int(len(loss_weights))}\n")
+        print(f"weights:  {weights}")
+
+        metrics_kfold_df, parameters_kfold_df = train_kfold(**kwargs)
+
+        # Stores metrics
+        metrics_kfold_dfs.append(metrics_kfold_df)
+        parameters_kfold_dfs.append(parameters_kfold_df)
+
+        # Store mse of the loss components and the corresponding loss weights
+        metrics_df = metrics_kfold_df[(metrics_kfold_df.metric == 'mse') & (metrics_kfold_df.stage == 'final')].\
+            groupby(['component', 'dataset'])[['value']].mean().reset_index()
+
+        for k,v in dict(zip(['lambda_' + i for i in weights.keys()], weights.values())).items():
+            metrics_df[k] = v
+
+        metrics_df['relative_gap'] = metrics_kfold_df['relative_gap']
+        metrics_df['replicate'] = i
+
+        metrics_dfs = pd.concat([metrics_dfs, metrics_df])
+
+        # metrics_dfs = pd.concat([metrics_df, pd.DataFrame(
+        #     {**dict(zip(['lambda_' + i for i in weights.keys()], weights.values())),
+        #      **row.to_dict(orient='records')[0],
+        #      **{'relative_gap': metrics_kfold_df['relative_gap']}}, index = [0]
+        # )
+        #                         ])
+
+        # Compute minimum loss
+        avg_loss = metrics_kfold_df[
+            (metrics_kfold_df.metric == target_metric) & (metrics_kfold_df.component == target_component) & (
+                        metrics_kfold_df.stage == 'final') & (metrics_kfold_df.dataset == 'validation')]['value'].mean()
+
+        if avg_loss < min_loss:
+            min_loss = avg_loss
+            min_idx = i
+
+        print(f'\nResults replicate: {i+1}, target metric: {target_metric}, '
+              f'average {target_metric} {target_component}: {float(avg_loss):0.2g}, best replicate: {min_idx+1}')
+
+    # metrics_df = metrics_df.reset_index().drop('index', axis=1)
+
+    os.remove(filepath)
+
+    return metrics_dfs, loss_weights[min_idx], metrics_kfold_dfs[min_idx], parameters_kfold_dfs[min_idx]
 
 
 def compute_benchmark_metric(metric=mse,

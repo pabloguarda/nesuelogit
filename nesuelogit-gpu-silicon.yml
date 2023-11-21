@@ -1,13 +1,15 @@
 name: nesuelogit-gpu
 channels:
-  - apple
   - conda-forge
+  - apple
 dependencies:
   - python=3.8
   - jupyter
   - pip
-  - tensorflow-deps == 2.10
-  - statsmodels
+  - conda-forge::statsmodels
+  - conda-forge::pykrige
+  - conda-forge::geopandas
+  - apple::tensorflow-deps == 2.10
   - pip:
      - git+https://github.com/pabloguarda/pesuelogit.git@conda-dependency
      - tensorflow-macos == 2.12 # == 2.10.0 #2.9.0
