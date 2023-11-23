@@ -6,13 +6,20 @@ input/private
 /output/models/*
 /output/models/kfold/*
 /output/experiments/*
-/output/figures/experiments/
-/output/figures/results/
+/output/figures/experiments/*
+/output/figures/results/*
+
+!output/models/kfold/
 !output/models/kfold/.gitkeep
 !output/models/.gitkeep
 !output/figures/.gitkeep
+
+!output/figures/experiments/
 !output/figures/experiments/.gitkeep
+
+!output/figures/results/
 !output/figures/results/.gitkeep
+
 !output/tables/.gitkeep
 
 /examples/notebooks/backup/
