@@ -6,6 +6,7 @@ dependencies:
   - jupyter
   - pip
   - statsmodels
+  - openmatrix
   - tensorflow
   - pip:
     - git+https://github.com/pabloguarda/pesuelogit.git@conda-dependency

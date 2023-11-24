@@ -1,13 +1,15 @@
-name: nesuelogit-cpu-intel
+name: nesuelogit
 channels:
-  - apple
   - conda-forge
 dependencies:
-  - python=3.8
+  - python>=3.8
   - jupyter
   - pip
   - statsmodels
+  - openmatrix
+  - pykrige
+  - geopandas
   - pip:
     - git+https://github.com/pabloguarda/pesuelogit.git@conda-dependency
-    - tensorflow == 2.12.0 #== 2.9 #2.10.0
+    - tensorflow==2.12.0 #== 2.9 #2.10.0
     #- protobuf==3.20.*
