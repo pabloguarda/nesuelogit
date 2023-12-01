@@ -22,6 +22,15 @@ from sklearn.preprocessing import OneHotEncoder
 from sklearn.model_selection import KFold
 from sklearn.preprocessing import PolynomialFeatures
 
+# Regression Krigging
+from sklearn.linear_model import LinearRegression
+from pykrige.rk import RegressionKriging
+from pykrige.uk import UniversalKriging
+from pykrige.ok import OrdinaryKriging
+import pykrige.kriging_tools as kt
+from mgwr.gwr import GWR, MGWR
+from mgwr.sel_bw import Sel_BW
+
 import statsmodels.api as sm
 
 from isuelogit.printer import block_output, printIterationBar
@@ -2092,10 +2101,10 @@ class NESUELOGIT(PESUELOGIT):
         return tf.concat([X[:, :, :-1], tf.expand_dims(period_ids, 2)], axis=2)
 
     def setup_period_ids(self,
-                         X_train: tf.constant,
-                         Y_train: tf.constant = None,
-                         X_val: tf.constant = None,
-                         Y_val: tf.constant = None,
+                         X_train: tf.Tensor,
+                         Y_train: tf.Tensor = None,
+                         X_val: tf.Tensor = None,
+                         Y_val: tf.Tensor = None,
                          node_data=None,
                          period_dict=None,
                          ):
@@ -2166,9 +2175,9 @@ class NESUELOGIT(PESUELOGIT):
 
     def fit(self,
             X_train: tf.Tensor,
-            Y_train: tf.constant = None,
-            X_val: tf.constant = None,
-            Y_val: tf.constant = None,
+            Y_train: tf.Tensor = None,
+            X_val: tf.Tensor = None,
+            Y_val: tf.Tensor = None,
             node_data: pd.DataFrame = None,
             optimizers=None,
             loss_weights: Dict[str, float] = None,
@@ -2651,8 +2660,7 @@ def train_val_split_by_links(Y: np.array, val_size=0) -> (np.ndarray, np.ndarray
 
     return Y_train, Y_val
 
-
-def make_kfold(y: tf.constant, n_splits=2, random_state: int = None, shuffle=False):
+def make_kfold(y: tf.Tensor, n_splits=2, random_state: int = None, shuffle=False):
     """
 
     :param X:
@@ -2687,8 +2695,8 @@ def make_kfold(y: tf.constant, n_splits=2, random_state: int = None, shuffle=Fal
 
 # @timeit
 def train_kfold(model: NESUELOGIT,
-                X: tf.constant,
-                Y: tf.constant,
+                X: tf.Tensor,
+                Y: tf.Tensor,
                 n_splits: int,
                 random_state=None,
                 *args,
@@ -2887,7 +2895,7 @@ def compute_benchmark_metric(metric=mse,
                              Y=None
                              ):
     '''
-    Compute banchmark with the historical mean of Y_ref. Y contains the true valesu of the
+    Compute benchmark with the historical mean of Y_ref. Y contains the true valesu of the
     observations of travel time and link flow
 
     prefix_metric: e.g. 'loss_'
@@ -2917,3 +2925,223 @@ def compute_benchmark_metrics(metrics: Dict, Y_ref, Y):
 
     return metrics_df
 
+
+def compute_baseline_predictions_kfold(X: tf.Tensor, y: tf.Tensor, coordinates, n_splits: int, seed: int):
+    """
+
+    :param X: inputs for regression, independent features
+    :param y: travel time or counts vector
+    :param coordinates: point coordinates associated to links, e.g., centroid of links
+    :param n_splits: splits for kfold
+    :param _SEED: seed for reproducibility
+    :return:
+    """
+
+    metrics_kfold = pd.DataFrame({})
+
+    folds = make_kfold(y= y, n_splits=n_splits, random_state=seed)
+
+    X = X.numpy()
+
+    isinstance(y.numpy(), tf.Tensor)
+
+    for i, fold in zip(range(1, n_splits + 1), folds):
+        # print(f'Fold {i}/{n_splits}')
+
+        y_train, y_val = fold
+
+        y_train, y_val = [i.numpy().flatten() for i in [y_train, y_val]]
+
+        train_idxs = np.where(~np.isnan(y_train.flatten()))[0]
+        val_idxs = np.where(np.isnan(y_train.flatten()))[0]
+
+        with block_output(show_stdout=False, show_stderr=False):
+            metrics_df = compute_baseline_predictions(X_train=X[train_idxs, :],
+                                                      X_val=X[val_idxs, :],
+                                                      y_train=y_train[train_idxs],
+                                                      y_val=y_val[val_idxs],
+                                                      coordinates_train= coordinates[train_idxs, :],
+                                                      coordinates_val= coordinates[val_idxs, :],
+                                                      metric = mape
+                                                      )
+
+        metrics_df = metrics_df.assign(fold=i, metric='mape', n_splits=n_splits)
+
+        metrics_kfold = pd.concat([metrics_kfold, metrics_df])
+
+    return metrics_kfold
+
+def compute_baseline_predictions(X_train, X_val, y_train, y_val, coordinates_train, coordinates_val,
+                                 metric = mape):
+        """
+
+        Models include historical mean, regression, ordinary krigging and krigging regression
+
+        :param X: matrix with features used to make predictions (|S| * |A| x |D|)
+        :param y: vector of either travel time or counts (|S| x |A| x 1)
+        :param coordinates: matrix with lon, lat coordinates of links (|A| x 2)
+        :return:
+
+        where S is the set of samples, A is the set of links and D is the set of exogenous features
+
+        """
+
+        # compute_benchmark_metric_model(metric=mape, Y_actual=Y_train, Y_pred=Y_pred)
+        # p = X
+        # x = coordinates
+        # # target = train_df['counts'].values[:,np.newaxis]
+        # target = y # train_df[target_label].values#[:, np.newaxis]
+        #
+        # # identify nan
+        # nonnan_idx = np.where(np.any(~np.isnan(target), axis=1))[0]
+        #
+        # p = p[nonnan_idx]
+        # x = x[nonnan_idx]
+        # target = target[nonnan_idx]
+
+        # p_train, p_test, x_train, x_test, target_train, target_test = train_test_split(
+        #     p, x, target, test_size=0.1#, random_state=42
+        # )
+
+        p_train, p_test, x_train, x_test, target_train, target_test \
+            = X_train, X_val, coordinates_train, coordinates_val, y_train, y_val
+
+        # Get rid of y values with nan observations
+        metrics_dict = {}
+
+        # 0) Historical mean
+        y_pred_historical_mean = np.nanmean(target_train)
+
+        metrics_dict['historical_mean'] = float(metric(target_test, y_pred_historical_mean * np.ones_like(target_test)))
+
+        # print('MAPE Historical mean', ))
+        # print('Median APE', median_absolute_percentage_error(target_test, y_pred_historical_mean))
+
+        # 1) Linear regression
+
+        lr_model = LinearRegression(copy_X=True, fit_intercept=True)
+
+        lr_model.fit(x_train, target_train)
+
+        metrics_dict['linear regression'] = float(metric(actual = target_test, predicted = lr_model.predict(x_test)))
+
+        # print('MAPE Linear regression', float(mape(actual = target_test, predicted = lr_model.predict(x_test))))
+        # print('Median APE', median_absolute_percentage_error(target_test, lr_model.predict(x_test)))
+
+        # m_rk.regression_model.score(p_test, target_test)
+
+        # 2) Ordinary kriging
+        OK = OrdinaryKriging(
+            x_train[:, 0],
+            x_train[:, 1],
+            target_train.flatten(),
+            # variogram_model="gaussian",
+            # variogram_model= 'linear',
+            variogram_model='exponential', # In line with Selby and Kockelman 2013
+            verbose=False,
+            enable_plotting=False,
+            # nlags = 20
+        )
+
+        try:
+            pred_okrigging, ss = OK.execute("points", x_test[:, 0], x_test[:, 1])
+
+            metrics_dict['ordinary krigging'] = float(metric(target_test.flatten(), pred_okrigging))
+        except:
+            metrics_dict['ordinary krigging'] = float('nan')
+
+        # print('MAPE Ordinary Krigging:', float(mape(target_test.flatten(), pred_okrigging)))
+        # print('Median APE', median_absolute_percentage_error(target_test, pred_okrigging))
+
+        # # 3) Universal kriging (too slow and perform similar than ordinary krigging)
+        # UK = UniversalKriging(
+        #     x_train[:, 0],
+        #     x_train[:, 1],
+        #     target_train.flatten(),
+        #     # variogram_model="linear",
+        #     variogram_model='exponential', # In line with Selby and Kockelman 2013
+        #     verbose=False,
+        #     drift_terms=["regional_linear"]
+        # )
+        #
+        # # TODO: Make predictions in test set
+        #
+        # pred_ukrigging, ss = UK.execute("points", x_test[:, 0], x_test[:, 1])
+        #
+        # print('MAPE Universal Krigging:', float(mape(target_test.flatten(), pred_ukrigging)))
+        # # print('Median APE', median_absolute_percentage_error(target_test, pred_ukrigging))
+
+        # 4) Regression kriging
+
+        # train_gdf.drop(['date'],axis = 1).to_file(f'{main_dir}/examples/scripts/output/fresno_network.shp',
+        #                                           driver='ESRI Shapefile')
+        lr_model = LinearRegression(copy_X=True, fit_intercept=True)
+
+        m_rk = RegressionKriging(regression_model=lr_model, n_closest_points=10, variogram_model = 'exponential')
+        # m_rk = RegressionKriging(regression_model=lr_model)
+
+        # rk = RegressionKriging(regression_model='linear', variogram_model='spherical')
+
+
+        with block_output(show_stdout=False, show_stderr=False):
+            m_rk.fit(p_train, x_train, target_train.flatten())
+
+        prediction_reg_krigging = m_rk.predict(p_test, x_test)
+
+        metrics_dict['krigging regression'] = float(metric(target_test.flatten(), prediction_reg_krigging))
+
+        # print('MAPE Regression krigging', float(mape(target_test.flatten(), prediction_reg_krigging)))
+
+        return pd.DataFrame({'model':metrics_dict.keys(), 'value': metrics_dict.values()})
+
+        # print('MAPE Regression krigging in sample', float(mape(target_train.flatten(), m_rk.predict(p_train, x_train))))
+        # print('Median APE', median_absolute_percentage_error(target_train, m_rk.predict(p_train, x_train)))
+
+        # # Geographical Weighted Regression (not working well due to matrix inversion issues)
+        # # https://deepnote.com/@carlos-mendez/PYTHON-GWR-and-MGWR-71dd8ba9-a3ea-4d28-9b20-41cc8a282b7a
+        #
+        # # Some columns are dropped as the matrix becomes singular
+        # X_train_gwr = p_train[:,0:-5]
+        # X_test_gwr = p_test[:,0:-5]
+        # # X_train_gwr = np.array([])
+        # # X_test_gwr = np.array([])
+        #
+        # coords = list(zip(x_train[:, 0], x_train[:, 1]))
+        #
+        # gwr_selector = Sel_BW(coords, target_train, X_train_gwr, multi=True, constant=True)
+        #
+        # gwr_bw = gwr_selector.search(multi_bw_min=[2], multi_bw_max=[10])
+        #
+        # gwr_model = GWR(x_train, target_train, X_train_gwr, gwr_bw)
+        #
+        # gwr_results = gwr_model.fit()
+        #
+        # # gwr_results.summary()
+        #
+        # # train_df['gwr_R2'] = gwr_results.localR2
+        #
+        # gwr_predictions = gwr_model.predict(x_test, X_test_gwr, gwr_results.scale, gwr_results.resid_response).predictions
+        #
+        # print('MAPE Geographical Weighted Regression', float(mape(target_test, gwr_predictions)))
+        # # print('Median APE', median_absolute_percentage_error(target_test, gwr_predictions))
+
+        # # Multi Geographical Weighted Regression (NOTE: prediction is not implemented)
+        # # https://deepnote.com/@carlos-mendez/PYTHON-GWR-and-MGWR-71dd8ba9-a3ea-4d28-9b20-41cc8a282b7a
+        #
+        # # Some columns are dropped as the matrix becomes singular
+        # X_train_mgwr = p_train[:, 0:-4]
+        # X_test_mgwr = p_test[:, 0:-4]
+        #
+        # coords = list(zip(x_train[:, 0], x_train[:, 1]))
+        #
+        # mgwr_selector = Sel_BW(coords, target_train[:, np.newaxis], X_train_mgwr, multi=True, constant=True)
+        #
+        # mgwr_bw = mgwr_selector.search(multi_bw_min=[2], multi_bw_max=[10])
+        #
+        # mgwr_model = MGWR(x_train, target_train[:, np.newaxis], X_train_gwr, mgwr_selector, constant=True)
+        #
+        # mgwr_results = mgwr_model.fit()
+        #
+        # # mgwr_results.summary()
+        #
+        # # train_df['gwr_R2'] = gwr_results.localR2
