@@ -28,8 +28,8 @@ from pykrige.rk import RegressionKriging
 from pykrige.uk import UniversalKriging
 from pykrige.ok import OrdinaryKriging
 import pykrige.kriging_tools as kt
-from mgwr.gwr import GWR, MGWR
-from mgwr.sel_bw import Sel_BW
+# from mgwr.gwr import GWR, MGWR
+# from mgwr.sel_bw import Sel_BW
 
 import statsmodels.api as sm
 
