@@ -6,6 +6,7 @@ dependencies:
   - jupyter
   - pip
   - statsmodels
+  - pykrige
   - openmatrix
   - tensorflow
   - pip:
