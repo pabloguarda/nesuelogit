@@ -25,13 +25,22 @@ input/private
 
 !output/tables/.gitkeep
 
-/examples/notebooks/backup/
-/examples/notebooks/output/
-
 /input/network-data/fresno/links/backup/
 /output/network-data/fresno/links/*
 
 /tests/output/
+
+# Other folders
+/examples/notebooks/backup/
+/examples/notebooks/output/
+/examples/scripts/*
+/examples/scripts/experiments-siouxfalls.py
+#!/examples/scripts/simulate-nesuelogit-data.py
+examples/scripts/estimation-fresno.py
+
+examples/notebooks/isttt/*
+
+ex
 
 ### Python template
 
@@ -178,3 +187,5 @@ cython_debug/
 
 # Pycharm
 .idea/
+
+
