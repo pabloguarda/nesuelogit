@@ -106,9 +106,30 @@ def plot_metrics_kfold(df, metric_name: str = 'mape', sharex=True, sharey=True, 
 
     return fig, axs
 
+def plot_baselines_kfold(df, metric_name='mape', sharex=True, sharey=True, **kwargs):
+    # fig, axs = plt.subplots()
 
+    sns.set_style("whitegrid")
 
-    # axs[0, 0].yaxis.set_tick_params(which='both', labelleft=True)
+    fig, ax = plt.subplots(1, 1, tight_layout=True, figsize=(8, 7), sharex=sharex, sharey=sharey)
+
+    df = df.copy()
+
+    # fig, ax = plt.subplots()
+    sns.boxplot(data=df, x="component", y="value", hue='model', ax=ax, **kwargs)
+    # ax.set_title(metric_name + ' before model training')
+    # ax.set_title('start of model training')
+    ax.set_ylabel(metric_name)
+    ax.set_xlabel('loss component')
+
+    ax.yaxis.set_tick_params(which='both', labelleft=True)
+    ax.get_yaxis().get_label().set_visible(True)
+    ax.get_xaxis().get_label().set_visible(True)
+    ax.xaxis.set_tick_params(which='both', labelbottom=True)
+
+    sns.set_style("ticks")
+
+    return fig, ax
 
 
 def plot_parameters_kfold(df, n_cols_legend = 2, figsize = (5.5,5.5), hour_label = False, style = 'whitegrid', **kwargs):
