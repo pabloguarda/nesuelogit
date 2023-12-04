@@ -17,6 +17,10 @@ import seaborn as sns
 import scipy as sp
 import pandas as pd
 import numpy as np
+import geopandas as gpd
+import contextily as ctx
+# from pysal.viz.mapclassify import Natural_Breaks
+from shapely.geometry import Point, LineString
 
 sns.set_style('ticks')
 sns.set_context('notebook')
@@ -25,7 +29,8 @@ sns.set_context('notebook')
 # from typing import Union, Dict, List, Tuple
 # from isuelogit.mytypes import Matrix
 from pesuelogit.models import compute_rr
-from nesuelogit.models import bpr_function, utility_parameters_periods
+from nesuelogit.models import bpr_function, utility_parameters_periods, compute_baseline_predictions
+from nesuelogit.etl import get_tensors_by_year
 from nesuelogit.metrics import r2_score
 
 import time
@@ -34,7 +39,7 @@ from typing import Union, Dict, List, Tuple
 from isuelogit.mytypes import Matrix
 
 
-def plot_metrics_kfold(df, metric_name: str = 'mape', sharex=True, sharey=True, **kwargs):
+def plot_metrics_kfold(df, metric_name = 'mape', benchmark_name = 'historical mean', sharex=True, sharey=True, **kwargs):
     # fig, axs = plt.subplots()
 
     sns.set_style("whitegrid")
@@ -62,8 +67,8 @@ def plot_metrics_kfold(df, metric_name: str = 'mape', sharex=True, sharey=True, 
     ax.set_ylabel(metric_name)
     ax.set_xlabel('loss component')
 
-    df = df[df['stage'].isin(['benchmark', 'model'])]
-    df['stage'] = pd.Categorical(df['stage'], categories=['benchmark', 'model'])
+    df = df[df['stage'].isin([benchmark_name, 'model'])]
+    df['stage'] = pd.Categorical(df['stage'], categories=[benchmark_name, 'model'])
 
     ax = axs[1, 0]
     sns.boxplot(data=df[(df.dataset == 'training')
@@ -80,7 +85,7 @@ def plot_metrics_kfold(df, metric_name: str = 'mape', sharex=True, sharey=True, 
     sns.boxplot(data=df[(df.dataset == 'validation')
                         & (df.metric == metric_name) & (df.stage != 'initial')], x="component", y="value", hue='stage',
                 ax=ax, palette=list(sns.color_palette("deep"))[3:5], **kwargs)
-    # ax.axhline(df[(df.dataset == 'validation') & (df.metric == metric_name) & (df.stage == 'benchmark') ])
+    # ax.axhline(df[(df.dataset == 'validation') & (df.metric == metric_name) & (df.stage == benchmark_name) ])
     # ax.set_title(metric_name + ' in validation set')
     ax.set_title('validation set')
     ax.set_ylabel(metric_name)
@@ -144,6 +149,7 @@ def plot_parameters_kfold(df, n_cols_legend = 2, figsize = (5.5,5.5), hour_label
 
     if hour_label:
         x_label = 'hour'
+        df.hour = pd.to_datetime(df['hour'], format='%H').dt.strftime('%I%p').str.lstrip("0")
 
     sns.pointplot(data=df, x=x_label, y='value', hue='parameter', ax=axs, **kwargs)
 
@@ -161,54 +167,6 @@ def plot_parameters(*args, **kwargs):
     # bbox_to_anchor_utility = [0.27, -0.15]
 
     return plot_parameters_kfold(style = 'ticks', *args, **kwargs)
-
-
-# def plot_parameters_kfold(df, n_cols_utility_legend = 2, n_cols_generation_legend = None, figsize = (12,6),
-#                           **kwargs):
-#     groups = df.group.unique()
-#
-#     bbox_to_anchor_utility = [0.27, -0.15]
-#
-#     axs_generation = None
-#     if len(groups) == 2:
-#         fig, axs = plt.subplots(1, 2, tight_layout=True, figsize=figsize)
-#         axs_utility, axs_generation = axs
-#     elif len(groups) == 1:
-#         figsize = (6, 6)
-#         fig, axs_utility = plt.subplots(1, 1, tight_layout=True, figsize=figsize)
-#         bbox_to_anchor_utility = [0.55, -0.15]
-#     else:
-#         return None
-#
-#     if n_cols_generation_legend is None:
-#         n_cols_generation_legend = len(df.query("group == 'generation'").parameter.unique())
-#
-#     if 'utility' in groups:
-#         sns.pointplot(data=df.query("group == 'utility'"),
-#                       x='period', y='value', hue='parameter', ax=axs_utility, **kwargs)
-#
-#         axs_utility.legend(loc='upper center',
-#                            # ncols=len(df.query("group == 'utility'").parameter.unique()),
-#                            ncols=n_cols_utility_legend,
-#                            bbox_to_anchor=bbox_to_anchor_utility,
-#                            bbox_transform=BlendedGenericTransform(fig.transFigure, axs_utility.transAxes))
-#
-#     if 'generation' in groups:
-#         sns.pointplot(data=df.query("group == 'generation'"),
-#                       x='period', y='value', hue='parameter', ax=axs_generation, **kwargs)
-#
-#         axs_generation.legend(loc='upper center',
-#                               ncols=n_cols_generation_legend,
-#                               bbox_to_anchor= [0.78, -0.15],
-#                               bbox_transform=BlendedGenericTransform(fig.transFigure, axs_generation.transAxes)
-#                               )
-#
-#     axs = [axs_utility, axs_generation]
-#
-#     return fig, axs
-
-
-
 
 def plot_flow_interaction_matrix(flow_interaction_matrix,
                                  masking_matrix,
@@ -991,8 +949,6 @@ def plot_total_trips_models(models, period_feature, period_keys, historic_od: np
     return total_trips_by_hour_models
 
 
-
-
 def plot_utility_parameters_periods(model, period_keys, period_feature, include_vot=False, plot=True):
 
     theta_df = utility_parameters_periods(
@@ -1014,3 +970,218 @@ def plot_utility_parameters_periods(model, period_keys, period_feature, include_
         # plt.show()
 
     return theta_df
+
+def plot_congestion_maps(model, model_df: pd.DataFrame, gdf: gpd.GeoDataFrame, features: List[str], benchmark_df,
+                         cmap = 'viridis'):
+
+    # Train benchmark model
+    X, y = get_tensors_by_year(benchmark_df, features_Z=features, links_keys=benchmark_df.link_key.drop_duplicates())
+    X_train, y_train = X[2019], y[2019]
+    X_val, y_val = X[2020], y[2020]
+
+    # Provide centroids of links as geographical information to compute regression kriging.
+    centroids = gdf.to_crs(2228).geometry.centroid.to_crs(4326)
+    gdf['X'], gdf['Y'] = centroids.x, centroids.y
+
+    #TODO: decide if using spatial coordinates in lat lon or projected crs
+
+    # Prediction travel time
+    _, predictions_traveltime_baseline = compute_baseline_predictions(X_train=X_train[0].numpy()[:,:1],
+                                                                      X_val=X_val[0].numpy()[:,:1],
+                                                                      y_train= y_train[0][:, 0].numpy(),
+                                                                      y_val= y_val[0][:, 0].numpy(),
+                                                                      coordinates_train=gdf[['X', 'Y']].values,
+                                                                      coordinates_val=gdf[['X', 'Y']].values,
+                                                                      models='regression_kriging'
+                                                                      )
+
+    # Prediction traffic flow
+    _, predictions_flow_baseline = compute_baseline_predictions(X_train=X_train[0].numpy(),
+                                                                X_val=X_val[0].numpy(),
+                                                                y_train=y_train[0][:, 1].numpy(),
+                                                                y_val=y_val[0][:, 1].numpy(),
+                                                                coordinates_train=gdf[['X', 'Y']].values,
+                                                                coordinates_val=gdf[['X', 'Y']].values,
+                                                                models='regression_kriging'
+                                                                )
+
+    benchmark_df = benchmark_df[benchmark_df.year == 2020]. \
+        assign(pred_traveltime_kriging=list(predictions_traveltime_baseline.values())[0],
+               pred_flow_kriging=list(predictions_flow_baseline.values())[0])
+
+    benchmark_df['pred_speed_kriging'] = benchmark_df.eval('length/pred_traveltime_kriging')*60 #Map to speed per hour
+
+    # Prepare model dataset
+    X, y = get_tensors_by_year(model_df, features_Z=features, links_keys=gdf.link_key)
+    X, Y = X[2020], y[2020]
+
+    # Add observed travel time and observed flow
+    model_df['obs_traveltime'] = Y[:, :, 0].numpy().flatten()
+    model_df['obs_flow'] = Y[:, :, 1].numpy().flatten()
+
+    # Add predicted values
+    model_df['pred_traveltime'] = model.predict_traveltime().numpy().flatten()
+    model_df['pred_flow'] = model.predict_flow().numpy().flatten()
+
+    # Select predictions that are within the date and hour of the benchmark dataset in 2020, i.e., the prediction year
+    model_df = model_df[(model_df.year == 2020) & (model_df.period.isin(benchmark_df.period.unique()))]
+
+    # Add features
+    model_df['pred_speed'] = model_df.eval('length/pred_traveltime')*60 #To map to speed per hour
+    model_df['obs_speed'] = model_df.eval('length/obs_traveltime')*60 #To map to speed per hour
+    model_df.loc[model_df['obs_speed'] == float('inf'), 'obs_speed'] = float('nan')
+
+    # Merge predictions from benchmark and model and then add spatial information
+    plot_df = gpd.GeoDataFrame(pd.merge(pd.merge(benchmark_df.drop(columns = ['capacity [veh]', 'speed_max']),
+                                                 model_df, on = 'link_key'),
+                              gdf, on=['link_key']), geometry='geometry').to_crs(epsg=3857)
+    
+    # Create additional variables 
+    plot_df['capacity'] = np.where(plot_df['capacity [veh]'] == float('inf'), float('nan'), plot_df['capacity [veh]'])
+    plot_df['pred_flow_ratio'] = plot_df.eval('pred_flow/capacity')
+    plot_df['obs_flow_ratio'] = plot_df.eval('obs_flow/capacity')
+    plot_df['pred_flow_ratio_kriging'] = plot_df.eval('pred_flow_kriging/capacity')
+    
+    plot_df.loc[plot_df.speed_max == 0, 'speed_max'] = plot_df[plot_df.speed_max != 0].speed_max.mean()
+
+    plot_df['obs_speed_ratio'] = plot_df.eval('obs_speed/speed_max')
+
+    plot_df.loc[plot_df['pred_speed'] == float('inf'), 'pred_speed'] = float('nan')
+    plot_df['pred_speed_ratio'] = plot_df.eval('pred_speed/speed_max')
+
+    # Post-processing to ensure that predictions from benchmark are within reasonable range
+    plot_df['pred_speed_ratio_kriging'] = plot_df['pred_speed_kriging'] / plot_df['speed_max']
+    # plot_df['pred_speed_ratio_kriging'] = plot_df['pred_speed_ratio_kriging'].clip(0, plot_df['obs_speed_ratio'].max())
+
+    # To show as percentage
+    plot_df['obs_speed_ratio'] = 100*plot_df['obs_speed_ratio']
+    plot_df['pred_speed_ratio'] = 100 * plot_df['pred_speed_ratio']
+    plot_df['pred_speed_ratio_kriging'] = 100 * plot_df['pred_speed_ratio_kriging']
+
+    plot_df['obs_flow_ratio'] = 100*plot_df['obs_flow_ratio']
+    plot_df['pred_flow_ratio'] = 100 * plot_df['pred_flow_ratio']
+    plot_df['pred_flow_ratio_kriging'] = 100 * plot_df['pred_flow_ratio_kriging']
+
+    # Plot of Speed prediction
+    # classifier_ = Natural_Breaks(data_values, k=5)
+    num_classes = 4
+    # data_values = plot_df[['obs_speed_ratio', 'pred_speed_ratio','pred_speed_ratio_kriging']].dropna().values.flatten()
+    # data_values = plot_df[['obs_speed_ratio']].dropna().values.flatten()
+    # min_val, max_val = min(data_values), max(data_values)
+    min_val, max_val = 0, 100
+    breaks = np.linspace(min_val, max_val, num_classes + 1).tolist()
+
+    # breaks = [data_values.quantile(i / num_classes) for i in range(1, num_classes)]
+    # breaks.insert(0,min_val )  # Add the minimum value as the first break
+    # breaks.append(max_val) # Add the maximum value as the last break
+    show_legend = False
+
+    scheme = 'userdefined'
+    # scheme = 'UserDefined'
+    # scheme = 'natural_breaks'
+    # scheme = "equal_interval"
+
+    # cmap = "viridis"
+    # cmap = "plasma"
+    # cmap = "OrRd"
+    # cmap = "YlOrRd"
+    # cmap = "Reds"
+
+    fig_speed, axs = plt.subplots(1, 4, tight_layout=True, figsize=(8, 7), sharex=True, sharey=True)
+
+    plot_df.plot(ax=axs[0], color = 'gray')
+
+    ctx.add_basemap(source=ctx.providers.OpenStreetMap.Mapnik, ax=axs[0])
+
+    plot_df[plot_df['obs_speed_ratio']>0].plot(column='obs_speed_ratio', scheme=scheme, cmap=cmap,  ax=axs[1],
+                 classification_kwds={'bins': breaks}, legend=True, legend_kwds = {"fmt": "{:.0f}%"})
+    axs[1].set_title('ground truth')
+
+    plot_df[(plot_df['pred_speed_ratio']>0)].plot(column='pred_speed_ratio', scheme=scheme, cmap=cmap, ax=axs[2],
+                 classification_kwds={'bins': breaks}, legend=show_legend, legend_kwds = {"fmt": "{:.0f}%"})
+    axs[2].set_title('our model')
+
+    plot_df[(plot_df['pred_speed_ratio_kriging']>0)].plot(column='pred_speed_ratio_kriging',
+                                                          scheme=scheme, cmap=cmap, ax=axs[3],
+                 classification_kwds={'bins': breaks}, legend=show_legend)
+    axs[3].set_title('best benchmark')
+
+    for ax in axs.flat:
+        ax.set_xticks([])
+        ax.set_yticks([])
+        ax.set_xticklabels([])
+        ax.set_yticklabels([])
+
+    legend = axs[1].get_legend()
+    #Get rid of first interval with -infinity
+    handles = legend.legendHandles[1:]
+    labels = [text.get_text() for text in legend.texts[1:]]
+    labels[0] = f"< {[x.strip() for x in labels[1].split(',')][0]}"
+    labels[-1] = '> 100%'
+    # axs[1].legend(handles=handles, labels = labels, loc='lower right')
+    # axs[1].legend([])
+    axs[1].legend().set_visible(False)
+
+
+
+    fig_speed.subplots_adjust(wspace=0, hspace=0)
+    plt.suptitle('Speed ratio')
+    # plt.show()
+    # fig_speed.text(0.5, 0.95, 'Speed ratio', ha='center', fontsize=16)
+
+    plt.close()
+
+    # Plot of traffic flow prediction
+
+    # scheme = 'natural_breaks'
+    # scheme = "equal_interval"
+
+    fig_flow, axs = plt.subplots(1, 4, tight_layout=True, figsize=(8, 7), sharex=True, sharey=True)
+
+    plot_df.plot(ax=axs[0], color = 'gray')
+
+    ctx.add_basemap(source=ctx.providers.OpenStreetMap.Mapnik, ax=axs[0])
+
+    plot_df[(plot_df['obs_flow_ratio']>0)].plot(column='obs_flow_ratio', scheme=scheme, cmap=cmap, ax=axs[1],
+                 classification_kwds={'bins': breaks}, legend=show_legend, legend_kwds = {"fmt": "{:.0f}%"})
+    axs[1].set_title('ground truth')
+
+    plot_df[(plot_df['pred_flow_ratio']>0)].plot(column='pred_flow_ratio', scheme=scheme, cmap=cmap, ax=axs[2],
+                 classification_kwds={'bins': breaks}, legend=show_legend, legend_kwds = {"fmt": "{:.0f}%"})
+    axs[2].set_title('our model')
+
+    plot_df[(plot_df['pred_flow_ratio_kriging']>0)].plot(column='pred_flow_ratio_kriging', scheme=scheme, cmap=cmap, ax=axs[3],
+                 classification_kwds={'bins': breaks}, legend=show_legend, legend_kwds = {"fmt": "{:.0f}%"})
+    axs[3].set_title('best benchmark')
+
+    for ax in axs.flat:
+        ax.set_xticks([])
+        ax.set_yticks([])
+        ax.set_xticklabels([])
+        ax.set_yticklabels([])
+
+    # fig = plt.gcf()
+    # fig.tight_layout(rect=[0, 0, 0.8, 1])
+
+    fig_flow.axes[0].get_legend_handles_labels()
+
+    fig_flow.subplots_adjust(wspace=0, hspace=0)
+    # fig_flow.text(0.5, 0.95, 'Flow ratio', ha='center', fontsize=16)
+    plt.suptitle('Flow ratio')
+
+    # axs[1].legend(handles=handles, labels=labels, loc='upper center', bbox_to_anchor=(1.2, -0.05))
+    # axs[1].legend([])
+    axs[1].legend().set_visible(False)
+    # plt.tight_layout(rect=[0, 0, 0.8, 1])
+    plt.close()
+
+    legend, ax = plt.subplots()
+    # legend.patch.set_facecolor('none')
+    ax.axis('off')
+    ax.legend(handles=handles, labels=labels)
+    legend.subplots_adjust(0, 0, 1, 1)
+    legend.tight_layout(pad=0)
+    plt.close()
+
+    return fig_speed, fig_flow, legend
+
