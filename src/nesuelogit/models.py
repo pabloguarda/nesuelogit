@@ -85,8 +85,8 @@ def get_period_ids(period_column: np.array, period_dict=None):
     return period_ids, period_dict
 
 
-def compute_generated_trips(q, ods, **kwargs):
-    od_parameters = ODParameters(ods=ods, trainable=False, initial_values=None)
+def compute_generated_trips(q, ods, n_nodes, **kwargs):
+    od_parameters = ODParameters(ods=ods, n_nodes = n_nodes, trainable=False, initial_values=None)
 
     return od_parameters.compute_generated_trips(values=q, **kwargs)
 
@@ -218,6 +218,7 @@ class ODParameters(pesuelogit.models.ODParameters):
 
     def __init__(self,
                  ods: List[Tuple],
+                 n_nodes: int = None,
                  features_generation: List[str] = None,
                  features_distribution: List[str] = None,
                  n_periods=1,
@@ -228,13 +229,16 @@ class ODParameters(pesuelogit.models.ODParameters):
 
         self.ods = ods
 
+        self._n_nodes = n_nodes
+
         # Sparse tensor generated from OD matrix of size |N| x |N|. Cells take value 1 if there are trips, 0, otherwise.
         self._L_sparse = tf.sparse.SparseTensor(indices=self.ods,
                                                 values=tf.ones_like(range(0, len(self.ods))),
-                                                dense_shape=(len(self.nodes), len(self.nodes)))
+                                                dense_shape=(self.n_nodes, self.n_nodes))
 
         self._features_generation = features_generation
         self._features_distribution = features_distribution
+
 
     @property
     def  historic_values_array(self):
@@ -272,17 +276,22 @@ class ODParameters(pesuelogit.models.ODParameters):
         self._features_distribution = value
 
     @property
-    def nodes(self):
-        cur_min = 0
-        cur_max = 0
+    def n_nodes(self):
+        return self._n_nodes
+        # cur_min = 0
+        # cur_max = 0
+        #
+        # for i, j in self.ods:
+        #     if max(i, j) >= cur_max:
+        #         cur_max = max(i, j)
+        #     if min(i, j) <= cur_min:
+        #         cur_min = min(i, j)
+        #
+        # return np.arange(cur_min, cur_max + 1)
 
-        for i, j in self.ods:
-            if max(i, j) >= cur_max:
-                cur_max = max(i, j)
-            if min(i, j) <= cur_min:
-                cur_min = min(i, j)
-
-        return np.arange(cur_min, cur_max + 1)
+    @n_nodes.setter
+    def n_nodes(self, value):
+       self._n_nodes = value
 
     @property
     def L_sparse(self):
@@ -308,7 +317,7 @@ class ODParameters(pesuelogit.models.ODParameters):
 
         return tf.sparse.SparseTensor(indices=indices,
                                       values=tf.reshape(values, -1),
-                                      dense_shape=(periods, len(self.nodes), len(self.nodes)))
+                                      dense_shape=(periods, self.n_nodes, self.n_nodes))
 
     def compute_generated_trips(self, values=None, **kwargs):
 
@@ -1594,7 +1603,7 @@ class NESUELOGIT(PESUELOGIT):
             # node_keys = pd.DataFrame({'key': [node for node, _ in self.od.ods]}).drop_duplicates()
             # node_keys = pd.DataFrame({'key': [node.key for node in self.network.nodes]})
             # node_keys = pd.DataFrame({'key': list(range(0, len([node.key for node in self.network.nodes])))})
-            node_keys = pd.DataFrame({'key': list(range(0, len([self.network.nodes[node_idx].key for node_idx in self.od.nodes])))})
+            node_keys = pd.DataFrame({'key': list(range(0, len([self.network.nodes[node_idx].key for node_idx in range(self.od.n_nodes)])))})
 
             self._node_data = pd.merge(node_keys, self._node_data, on='key')
 
@@ -1746,7 +1755,7 @@ class NESUELOGIT(PESUELOGIT):
 
         V = tf.sparse.SparseTensor(indices=indices,
                                    values=tf.reshape(v, [-1]),
-                                   dense_shape=(self.n_periods, len(self.od.nodes), len(self.od.nodes))
+                                   dense_shape=(self.n_periods, self.od.n_nodes, self.od.n_nodes)
                                    )
 
         normalized_values = V.values - tf.stop_gradient(tf.reshape(
@@ -1756,7 +1765,7 @@ class NESUELOGIT(PESUELOGIT):
 
         V = tf.sparse.SparseTensor(indices=indices,
                                    values=tf.exp(normalized_values),
-                                   dense_shape=(self.n_periods, len(self.od.nodes), len(self.od.nodes)))
+                                   dense_shape=(self.n_periods, self.od.n_nodes, self.od.n_nodes))
 
         phi = tf.reshape(V.values, v.shape) / \
               tf.repeat(tf.sparse.reduce_sum(V, axis=2), tf.sparse.reduce_sum(self.od.L_sparse, axis=1), axis=1)
@@ -2317,7 +2326,7 @@ class NESUELOGIT(PESUELOGIT):
 
         # Print benchmark based on mean reported in training data
         if Y_val is not None:
-            print("Benchmark metrics using mean in training data to make predictions in the validation set: ")
+            print("Benchmark metrics using historical mean in training data to make predictions in the validation set: ")
             with pd.option_context('display.float_format', '{:0.2g}'.format):
                 print('\n')
                 print(compute_benchmark_metrics(metrics={'mape': mape, 'mse': mse, 'r2': r2_score}, Y_ref=Y_train, Y=Y_val))
@@ -2783,11 +2792,13 @@ def train_kfold(model: NESUELOGIT,
         metrics_df = pd.concat([metrics_df,
                                 compute_benchmark_metrics(metrics={'mape': mape, 'mse': mse, 'r2': r2_score},
                                                           Y_ref=Y_train, Y=Y_train).assign(dataset='training',
-                                                                                           fold = i, stage = 'benchmark')])
+                                                                                           fold = i,
+                                                                                           stage = 'historical mean')])
         metrics_df = pd.concat([metrics_df,
                                 compute_benchmark_metrics(metrics={'mape': mape, 'mse': mse, 'r2': r2_score},
                                                           Y_ref=Y_train, Y=Y_val).assign(dataset='validation',
-                                                                                         fold = i, stage = 'benchmark')])
+                                                                                         fold = i,
+                                                                                         stage = 'historical mean')])
 
         metrics_df['relative_gap'] = relative_gap
 
@@ -2814,7 +2825,7 @@ def train_kfold(model: NESUELOGIT,
     # print("%0.2f accuracy with a standard deviation of %0.2f" % (scores.mean(), scores.std()))
 
 
-def regularization_kfold(target_metric: str, target_component: str, loss_weights: List[Dict], **kwargs):
+def regularization_kfold(loss_weights: List[Dict], target_metric: str = None, target_component: str = None,  **kwargs):
 
     """
 
@@ -2870,23 +2881,27 @@ def regularization_kfold(target_metric: str, target_component: str, loss_weights
         # )
         #                         ])
 
-        # Compute minimum loss
-        avg_loss = metrics_kfold_df[
-            (metrics_kfold_df.metric == target_metric) & (metrics_kfold_df.component == target_component) & (
-                        metrics_kfold_df.stage == 'final') & (metrics_kfold_df.dataset == 'validation')]['value'].mean()
+        if target_metric is not None and target_component is not None:
+            # Compute minimum loss
+            avg_loss = metrics_kfold_df[
+                (metrics_kfold_df.metric == target_metric) & (metrics_kfold_df.component == target_component) &
+                (metrics_kfold_df.stage == 'final') & (metrics_kfold_df.dataset == 'validation')]['value'].mean()
 
-        if avg_loss < min_loss:
-            min_loss = avg_loss
-            min_idx = i
+            if avg_loss < min_loss:
+                min_loss = avg_loss
+                min_idx = i
 
-        print(f'\nResults replicate: {i+1}, target metric: {target_metric}, '
-              f'average {target_metric} {target_component}: {float(avg_loss):0.2g}, best replicate: {min_idx+1}')
+            print(f'\nResults replicate: {i+1}, target metric: {target_metric}, '
+                  f'average {target_metric} {target_component}: {float(avg_loss):0.2g}, best replicate: {min_idx+1}')
 
     # metrics_df = metrics_df.reset_index().drop('index', axis=1)
 
     os.remove(filepath)
 
-    return metrics_dfs, loss_weights[min_idx], metrics_kfold_dfs[min_idx], parameters_kfold_dfs[min_idx]
+    if target_metric is not None and target_component is not None:
+        return metrics_dfs, loss_weights[min_idx], metrics_kfold_dfs[min_idx], parameters_kfold_dfs[min_idx]
+    else:
+        return metrics_dfs, loss_weights, parameters_kfold_dfs
 
 
 def compute_benchmark_metric(metric=mse,
@@ -2929,12 +2944,15 @@ def compute_benchmark_metrics(metrics: Dict, Y_ref, Y):
 def compute_baseline_predictions_kfold(X: tf.Tensor, y: tf.Tensor, coordinates, n_splits: int, seed: int):
     """
 
-    :param X: inputs for regression, independent features
-    :param y: travel time or counts vector
+    :param X: inputs for regression, independent features (|S| * |A| x |D|)
+    :param y: travel time or counts matrix  (|S| x |A|)
     :param coordinates: point coordinates associated to links, e.g., centroid of links
     :param n_splits: splits for kfold
-    :param _SEED: seed for reproducibility
+    :param seed: seed for reproducibility
     :return:
+
+    where S is the set of samples, A is the set of links and D is the set of exogenous features
+
     """
 
     metrics_kfold = pd.DataFrame({})
@@ -2956,7 +2974,7 @@ def compute_baseline_predictions_kfold(X: tf.Tensor, y: tf.Tensor, coordinates, 
         val_idxs = np.where(np.isnan(y_train.flatten()))[0]
 
         with block_output(show_stdout=False, show_stderr=False):
-            metrics_df = compute_baseline_predictions(X_train=X[train_idxs, :],
+            metrics_df, _ = compute_baseline_predictions(X_train=X[train_idxs, :],
                                                       X_val=X[val_idxs, :],
                                                       y_train=y_train[train_idxs],
                                                       y_val=y_val[val_idxs],
@@ -2971,89 +2989,81 @@ def compute_baseline_predictions_kfold(X: tf.Tensor, y: tf.Tensor, coordinates, 
 
     return metrics_kfold
 
-def compute_baseline_predictions(X_train, X_val, y_train, y_val, coordinates_train, coordinates_val,
-                                 metric = mape):
+def compute_baseline_predictions(X_train: np.ndarray,
+                                 X_val: np.ndarray,
+                                 y_train: np.ndarray,
+                                 y_val: np.ndarray,
+                                 coordinates_train: np.ndarray,
+                                 coordinates_val: np.ndarray,
+                                 metric = mape,
+                                 models = None):
         """
-
-        Models include historical mean, regression, ordinary krigging and krigging regression
-
-        :param X: matrix with features used to make predictions (|S| * |A| x |D|)
-        :param y: vector of either travel time or counts (|S| x |A| x 1)
-        :param coordinates: matrix with lon, lat coordinates of links (|A| x 2)
+        Models include historical mean, regression, ordinary kriging and kriging regression
+        :param X_train: matrix with features used to make predictions (|A| x |D|)
+        :param y_train: vector of either travel time or counts (|A| x 1)
+        :param coordinates_train: matrix with lon, lat coordinates of links (|A| x 2)
+        :papram models: list of models names that will be used as baselines. Default is to train all models
         :return:
 
-        where S is the set of samples, A is the set of links and D is the set of exogenous features
-
+        where A is the set of links and D is the set of exogenous features
         """
+        _models = ['historical_mean', 'ordinary_kriging', 'regression_kriging', 'linear_regression']
 
-        # compute_benchmark_metric_model(metric=mape, Y_actual=Y_train, Y_pred=Y_pred)
-        # p = X
-        # x = coordinates
-        # # target = train_df['counts'].values[:,np.newaxis]
-        # target = y # train_df[target_label].values#[:, np.newaxis]
-        #
-        # # identify nan
-        # nonnan_idx = np.where(np.any(~np.isnan(target), axis=1))[0]
-        #
-        # p = p[nonnan_idx]
-        # x = x[nonnan_idx]
-        # target = target[nonnan_idx]
+        if models is None:
+            models = _models
 
-        # p_train, p_test, x_train, x_test, target_train, target_test = train_test_split(
-        #     p, x, target, test_size=0.1#, random_state=42
-        # )
+        # Get rid of values in validation set with nan observations
+        train_non_nan_idxs = ~np.isnan(y_train)
+        val_non_nan_idxs = ~np.isnan(y_val)
 
-        p_train, p_test, x_train, x_test, target_train, target_test \
-            = X_train, X_val, coordinates_train, coordinates_val, y_train, y_val
+        p_train, x_train, target_train \
+            = X_train[train_non_nan_idxs], coordinates_train[train_non_nan_idxs], y_train[train_non_nan_idxs]
 
-        # Get rid of y values with nan observations
+        p_val, x_val, target_val = X_val, coordinates_val, y_val
+        # p_val, x_val, target_val = \
+        #     X_val[val_non_nan_idxs], coordinates_val[val_non_nan_idxs], y_val[val_non_nan_idxs]
+
         metrics_dict = {}
+        predictions = {}
 
-        # 0) Historical mean
-        y_pred_historical_mean = np.nanmean(target_train)
+        # 1) Historical mean
+        if 'historical_mean' in models:
+            y_pred_historical_mean = np.nanmean(target_train)
+            predictions['historical_mean'] = y_pred_historical_mean * np.ones_like(target_val)
+            metrics_dict['historical_mean'] = float(metric(target_val, predictions['historical_mean']))
 
-        metrics_dict['historical_mean'] = float(metric(target_test, y_pred_historical_mean * np.ones_like(target_test)))
+        # 2) Linear regression
+        if 'linear_regression' in models:
+            lr_model = LinearRegression(copy_X=True, fit_intercept=True)
 
-        # print('MAPE Historical mean', ))
-        # print('Median APE', median_absolute_percentage_error(target_test, y_pred_historical_mean))
+            lr_model.fit(x_train, target_train)
+            predictions['linear_regression'] = lr_model.predict(x_val)
 
-        # 1) Linear regression
+            metrics_dict['linear_regression'] = float(metric(actual = target_val,
+                                                             predicted = predictions['linear_regression']))
 
-        lr_model = LinearRegression(copy_X=True, fit_intercept=True)
+        # 3) Ordinary kriging
+        if 'ordinary_kriging' in models:
+            OK = OrdinaryKriging(
+                x_train[:, 0],
+                x_train[:, 1],
+                target_train.flatten(),
+                # variogram_model="gaussian",
+                # variogram_model= 'linear',
+                variogram_model='exponential', # In line with Selby and Kockelman 2013
+                verbose=False,
+                enable_plotting=False,
+                # nlags = 20
+            )
 
-        lr_model.fit(x_train, target_train)
+            try:
+                predictions['ordinary_kriging'], ss = OK.execute("points", x_val[:, 0], x_val[:, 1])
+                metrics_dict['ordinary_kriging'] = float(metric(target_val.flatten(),
+                                                                 predictions['ordinary_kriging']))
+            except:
+                metrics_dict['ordinary_kriging'] = float('nan')
 
-        metrics_dict['linear regression'] = float(metric(actual = target_test, predicted = lr_model.predict(x_test)))
-
-        # print('MAPE Linear regression', float(mape(actual = target_test, predicted = lr_model.predict(x_test))))
-        # print('Median APE', median_absolute_percentage_error(target_test, lr_model.predict(x_test)))
-
-        # m_rk.regression_model.score(p_test, target_test)
-
-        # 2) Ordinary kriging
-        OK = OrdinaryKriging(
-            x_train[:, 0],
-            x_train[:, 1],
-            target_train.flatten(),
-            # variogram_model="gaussian",
-            # variogram_model= 'linear',
-            variogram_model='exponential', # In line with Selby and Kockelman 2013
-            verbose=False,
-            enable_plotting=False,
-            # nlags = 20
-        )
-
-        try:
-            pred_okrigging, ss = OK.execute("points", x_test[:, 0], x_test[:, 1])
-
-            metrics_dict['ordinary krigging'] = float(metric(target_test.flatten(), pred_okrigging))
-        except:
-            metrics_dict['ordinary krigging'] = float('nan')
-
-        # print('MAPE Ordinary Krigging:', float(mape(target_test.flatten(), pred_okrigging)))
-        # print('Median APE', median_absolute_percentage_error(target_test, pred_okrigging))
-
-        # # 3) Universal kriging (too slow and perform similar than ordinary krigging)
+        # # 3) Universal kriging (too slow and perform similar than ordinary kriging)
         # UK = UniversalKriging(
         #     x_train[:, 0],
         #     x_train[:, 1],
@@ -3066,45 +3076,47 @@ def compute_baseline_predictions(X_train, X_val, y_train, y_val, coordinates_tra
         #
         # # TODO: Make predictions in test set
         #
-        # pred_ukrigging, ss = UK.execute("points", x_test[:, 0], x_test[:, 1])
+        # pred_ukriging, ss = UK.execute("points", x_val[:, 0], x_val[:, 1])
         #
-        # print('MAPE Universal Krigging:', float(mape(target_test.flatten(), pred_ukrigging)))
-        # # print('Median APE', median_absolute_percentage_error(target_test, pred_ukrigging))
+        # print('MAPE Universal kriging:', float(mape(target_val.flatten(), pred_ukriging)))
+        # # print('Median APE', median_absolute_percentage_error(target_val, pred_ukriging))
 
         # 4) Regression kriging
 
-        # train_gdf.drop(['date'],axis = 1).to_file(f'{main_dir}/examples/scripts/output/fresno_network.shp',
-        #                                           driver='ESRI Shapefile')
-        lr_model = LinearRegression(copy_X=True, fit_intercept=True)
+        if 'regression_kriging' in models:
+            # train_gdf.drop(['date'],axis = 1).to_file(f'{main_dir}/examples/scripts/output/fresno_network.shp',
+            #                                           driver='ESRI Shapefile')
+            lr_model = LinearRegression(copy_X=True, fit_intercept=True)
 
-        m_rk = RegressionKriging(regression_model=lr_model, n_closest_points=10, variogram_model = 'exponential')
-        # m_rk = RegressionKriging(regression_model=lr_model)
+            m_rk = RegressionKriging(regression_model=lr_model, n_closest_points=10, variogram_model='linear')
+            # Exponential is very unstable
+            # m_rk = RegressionKriging(regression_model=lr_model, n_closest_points=10, variogram_model = 'exponential')
+            # m_rk = RegressionKriging(regression_model=lr_model)
 
-        # rk = RegressionKriging(regression_model='linear', variogram_model='spherical')
+            # rk = RegressionKriging(regression_model='linear', variogram_model='spherical')
 
+            # non_zero_idxs = np.where(target_train>0)[0]
+            # p_train, x_train, target_train = p_train[non_zero_idxs], x_train[non_zero_idxs], target_train[non_zero_idxs]
+            # p_val, x_val, target_val = p_val[non_zero_idxs], x_val[non_zero_idxs], target_val[non_zero_idxs]
 
-        with block_output(show_stdout=False, show_stderr=False):
-            m_rk.fit(p_train, x_train, target_train.flatten())
+            with block_output(show_stdout=False, show_stderr=False):
+                m_rk.fit(p_train, x_train, target_train.flatten())
 
-        prediction_reg_krigging = m_rk.predict(p_test, x_test)
+            predictions['regression_kriging'] = m_rk.predict(p_val, x_val)
 
-        metrics_dict['krigging regression'] = float(metric(target_test.flatten(), prediction_reg_krigging))
+            metrics_dict['kriging_regression'] = float(metric(target_val.flatten(), predictions['regression_kriging']))
 
-        # print('MAPE Regression krigging', float(mape(target_test.flatten(), prediction_reg_krigging)))
-
-        return pd.DataFrame({'model':metrics_dict.keys(), 'value': metrics_dict.values()})
-
-        # print('MAPE Regression krigging in sample', float(mape(target_train.flatten(), m_rk.predict(p_train, x_train))))
-        # print('Median APE', median_absolute_percentage_error(target_train, m_rk.predict(p_train, x_train)))
+        return pd.DataFrame({'model':metrics_dict.keys(), 'value': metrics_dict.values(),
+                             'obs_validation': len(val_non_nan_idxs)}), predictions
 
         # # Geographical Weighted Regression (not working well due to matrix inversion issues)
         # # https://deepnote.com/@carlos-mendez/PYTHON-GWR-and-MGWR-71dd8ba9-a3ea-4d28-9b20-41cc8a282b7a
         #
         # # Some columns are dropped as the matrix becomes singular
         # X_train_gwr = p_train[:,0:-5]
-        # X_test_gwr = p_test[:,0:-5]
+        # X_val_gwr = p_val[:,0:-5]
         # # X_train_gwr = np.array([])
-        # # X_test_gwr = np.array([])
+        # # X_val_gwr = np.array([])
         #
         # coords = list(zip(x_train[:, 0], x_train[:, 1]))
         #
@@ -3120,17 +3132,17 @@ def compute_baseline_predictions(X_train, X_val, y_train, y_val, coordinates_tra
         #
         # # train_df['gwr_R2'] = gwr_results.localR2
         #
-        # gwr_predictions = gwr_model.predict(x_test, X_test_gwr, gwr_results.scale, gwr_results.resid_response).predictions
+        # gwr_predictions = gwr_model.predict(x_val, X_val_gwr, gwr_results.scale, gwr_results.resid_response).predictions
         #
-        # print('MAPE Geographical Weighted Regression', float(mape(target_test, gwr_predictions)))
-        # # print('Median APE', median_absolute_percentage_error(target_test, gwr_predictions))
+        # print('MAPE Geographical Weighted Regression', float(mape(target_val, gwr_predictions)))
+        # # print('Median APE', median_absolute_percentage_error(target_val, gwr_predictions))
 
         # # Multi Geographical Weighted Regression (NOTE: prediction is not implemented)
         # # https://deepnote.com/@carlos-mendez/PYTHON-GWR-and-MGWR-71dd8ba9-a3ea-4d28-9b20-41cc8a282b7a
         #
         # # Some columns are dropped as the matrix becomes singular
         # X_train_mgwr = p_train[:, 0:-4]
-        # X_test_mgwr = p_test[:, 0:-4]
+        # X_val_mgwr = p_val[:, 0:-4]
         #
         # coords = list(zip(x_train[:, 0], x_train[:, 1]))
         #
