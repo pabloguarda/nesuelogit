@@ -3,7 +3,10 @@ from isuelogit.nodes import Node, NodePosition
 from isuelogit.links import Link
 from pesuelogit.networks import TransportationNetwork
 from isuelogit.factory import NetworkGenerator
+from pesuelogit.etl import get_y_tensor, get_design_tensor
 
+from typing import Dict, List, Tuple
+import tensorflow as tf
 
 def build_network(nodes_df, links_df, crs, key=''):
     # # Read nodes data
@@ -17,7 +20,7 @@ def build_network(nodes_df, links_df, crs, key=''):
 
     network_generator = NetworkGenerator()
 
-    A = network_generator.generate_adjacency_matrix(links_keys=list(links_df['link_key'].values))
+    A = network_generator.generate_adjacency_matrix(links_keys=sorted(list(links_df['link_key'].values)))
 
     network = TransportationNetwork(A=A, key = key)
 
@@ -76,3 +79,31 @@ def build_network(nodes_df, links_df, crs, key=''):
     # To correct problem with assignment of performance
 
     return network
+
+def get_tensors_by_year(df: pd.DataFrame, features_Z: List[str], links_keys: List[str]) \
+        -> Tuple[Dict[str, tf.Tensor],Dict[str, tf.Tensor]]:
+
+    n_links = len(df.link_key.unique())
+    X,Y = {}, {}
+
+    for year in sorted(df['year'].unique()):
+        df_year = df[df['year'] == year]
+
+        # n_dates, n_hours = len(df_year.date.unique()), len(df_year.hour.unique())
+        #
+        # n_timepoints = n_dates * n_hours
+        n_timepoints = len(df_year[['date', 'hour']].drop_duplicates())
+
+        # Order of data should comply with the internal order of links in the network given by links_dict
+        df_year['link_key'] = pd.Categorical(df_year['link_key'], links_keys)
+
+        df_year = df_year.sort_values(['period','link_key'])
+
+        traveltime_data = get_y_tensor(y=df_year[['tt_avg']], n_links=n_links, n_timepoints=n_timepoints)
+        flow_data = get_y_tensor(y=df_year[['counts']], n_links=n_links, n_timepoints=n_timepoints)
+
+        Y[year] = tf.concat([traveltime_data, flow_data], axis=2)
+
+        X[year] = get_design_tensor(Z=df_year[features_Z + ['period_id']], n_links=n_links, n_timepoints=n_timepoints)
+
+    return X, Y
