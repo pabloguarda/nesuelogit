@@ -7,6 +7,8 @@ dependencies:
   - pip
   - statsmodels
   - pykrige
+  - geopandas
+  - contextily
   - openmatrix
   - tensorflow
   - pip:
