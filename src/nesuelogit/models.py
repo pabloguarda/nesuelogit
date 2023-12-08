@@ -641,7 +641,11 @@ class PolynomialLayer(tf.keras.layers.Layer):
         else:
             flows = tf.einsum("ijk,lk -> ij", flows, self.poly_weights)
 
-        return tf.cast(tf.experimental.numpy.take(flows, tf.cast(period_ids[:,0], dtype=tf.int32), 0), self.dtype)
+        if flows.shape[0] == n_periods:
+            return tf.cast(tf.experimental.numpy.take(flows, tf.cast(period_ids[:,0], dtype=tf.int32), 0), self.dtype)
+        else:
+            return flows
+
 
     def pretrain_weights(self, flows, free_flow_traveltimes, capacities):
         """
@@ -1051,10 +1055,9 @@ class NESUELOGIT(PESUELOGIT):
         self.set_period_ids(X.numpy(), period_dict, update_period_dict= update_period_dict)
         self.period_ids = X[:,:,-1]
 
-        self._predicted_flow = self.predict_flow()
         self._predicted_traveltime = self.predict_traveltime()
-        self._output_flow = self.compute_link_flows(X)
-        self._input_flow = self.flows
+        self._output_flow = self.output_flow(X)
+        self._predicted_flow = self.predict_flow()
 
     def compute_loss_metric(self,
                             metric=mse,
@@ -1079,10 +1082,10 @@ class NESUELOGIT(PESUELOGIT):
         observed_traveltime = self._observed_traveltime
         observed_flow = self._observed_flow
 
-        predicted_flow = self._predicted_flow
-        predicted_traveltime = self._predicted_traveltime
-        output_flow = self._output_flow
-        input_flow = self._input_flow
+        predicted_flow = self.predict_flow()
+        predicted_traveltime = self.predict_traveltime()
+        output_flow = self.output_flow()
+        input_flow = self.input_flow
 
         return {prefix_metric + 'flow': float(metric(actual=observed_flow, predicted=predicted_flow)),
                 prefix_metric + 'traveltime': float(metric(actual=observed_traveltime, predicted=predicted_traveltime)),
@@ -1124,16 +1127,14 @@ class NESUELOGIT(PESUELOGIT):
         # predicted_traveltimes = self.bpr_traveltimes(predicted_flow)
 
         # input_flow = tf.stop_gradient(self.flows)
-        self._input_flow = self.flows
+        self._output_flow = self.output_flow(X)
 
-        self._output_flow = self.compute_link_flows(X)
-
-        self._predicted_flow = self._input_flow  # tf.stop_gradient(self.predict_flow())
-        # predicted_flow = self.predict_flow()
+        # self._predicted_flow = self.input_flow  # tf.stop_gradient(self.predict_flow())
+        self._predicted_flow = self.predict_flow()
         # predicted_flow = output_flow
 
         # predicted_traveltimes = tf.stop_gradient(self.traveltimes())
-        self._predicted_traveltime = self.traveltimes()
+        self._predicted_traveltime = self.predict_traveltime()
 
     def equilibrium_loss(self, input_flow, output_flow, observed_flow, Y, loss_metric = mse):
 
@@ -1294,7 +1295,6 @@ class NESUELOGIT(PESUELOGIT):
             self.regularization_loss = self.compute_regularization_loss(lambdas_vals)
             loss = {**loss, **self.regularization_loss}
 
-
         # if self.od.features_generation:
         #     lambdas_vals['generation'] = 1e2
         #     loss['generation'] = mse(actual = compute_generated_trips(historic_od, ods = self.od.ods),
@@ -1303,12 +1303,10 @@ class NESUELOGIT(PESUELOGIT):
         # Equilibrium loss
         loss['equilibrium'] = self.equilibrium_loss(loss_metric = loss_metric,
                                                     Y = Y,
-                                                    input_flow = self._input_flow,
-                                                    output_flow = self._output_flow,
+                                                    input_flow = self.input_flow,
+                                                    output_flow = self.output_flow(),
                                                     observed_flow = self._observed_flow)
 
-        # np.nanmean(self._observed_traveltime)
-        # np.nanmean(predicted_traveltimes)
         historic_od = self.q.numpy()
         historic_od[:] = np.nan
 
@@ -1328,12 +1326,12 @@ class NESUELOGIT(PESUELOGIT):
 
         if Y is not None:
             loss.update({
-                'flow': loss_metric(actual=self._observed_flow, predicted=self._predicted_flow),
+                'flow': loss_metric(actual=self.observed_flow(), predicted=self.predicted_flow()),
                 # 'flow': loss_metric(actual=self._observed_flow, predicted=output_flow),
                 'traveltime': loss_metric(
                     # actual=tf.reduce_mean(self._observed_traveltime, axis = 0,keepdims=True),
-                    actual=self._observed_traveltime,
-                    predicted=self._predicted_traveltime),
+                    actual=self.observed_traveltime(),
+                    predicted=self.predicted_traveltime()),
                 # 'theta': tf.reduce_mean(tf.norm(self.theta, 1)),
             }
 
@@ -1504,12 +1502,48 @@ class NESUELOGIT(PESUELOGIT):
 
         # return tf.experimental.numpy.take(traveltimes,tf.cast(self.period_ids[:,0], dtype = tf.int32),0)
 
-    def predict_traveltime(self):
+    def output_traveltime(self, flows = None):
+        """ Return tensor variable associated to endogenous travel times (assumed dependent on link flows)"""
 
+        if self.performance_function.type == 'bpr':
+            if flows is None:
+                flows = self.output_flow()
+
+        elif self.performance_function.type == 'mlp':
+
+            if flows is None:
+                flows = self.output_flow()
+
+            flows = self.performance_function.polynomial_layer.transform_flows(
+                flows,
+                capacities = self.performance_function.capacities,
+                period_ids = self.period_ids,
+                n_periods = self.n_periods)
+
+        traveltimes = self.performance_function.call(flows)
+
+        traveltimes = self.mask_predicted_traveltimes(tt=traveltimes,
+                                                      k=np.array([link.bpr.k for link in self.network.links]),
+                                                      max_factor = self.performance_function.max_traveltime_factor)
+
+        return traveltimes
+
+    def predicted_traveltime(self):
+
+        return self._predicted_traveltime
+
+    def predict_traveltime(self, flows = None):
         return self.traveltimes()
+        # return self.output_traveltime(flows)
 
-    def predict_flow(self):
-        return self.flows
+    def predicted_flow(self):
+        return self._predicted_flow
+
+    def predict_flow(self, X = None):
+
+        return self.input_flow
+        # return self.output_flow(X)
+
 
     def class_membership_probabilities(self):
 
@@ -1992,8 +2026,24 @@ class NESUELOGIT(PESUELOGIT):
 
         # Create parameters of performance function
         self.performance_function.build()
+    
+    @property
+    def input_flow(self):
+        return self.flows
+    
+    def output_flow(self, X = None):
+
+        if X is None:
+            return self._output_flow
+        else:
+            return self.compute_link_flows(X)
 
     def compute_link_flows(self, X):
+        """
+        Compute output link flows
+        :param X: Matrix with link level features
+        :return:
+        """
 
         self.period_ids = X[:, :, -1]
 
@@ -2071,7 +2121,7 @@ class NESUELOGIT(PESUELOGIT):
 
         self.update_predictions(X, period_dict)
 
-        predicted_flow = self._input_flow
+        predicted_flow = self.predict_flow()
 
         predicted_traveltime = self.traveltimes()
 
@@ -2358,17 +2408,17 @@ class NESUELOGIT(PESUELOGIT):
             if not convergence:
                 # self.period_ids = X_train[:, :, -1]
                 path_flows = self.path_flows(self.path_probabilities(self.path_utilities(self.link_utilities(X_train))))
-                link_flow = self.link_flows(path_flows)
+                output_link_flow = self.link_flows(path_flows)
                 # relative_x = float(np.nanmean(np.abs(tf.divide(link_flow,self.flows) - 1)))
 
                 if epoch >= 0:
                     normalizer = 1
-                    if self.flows.shape[0] < link_flow.shape[0]:
-                        normalizer = int(link_flow.shape[0] / self.flows.shape[0])
+                    if self.flows.shape[0] < output_link_flow.shape[0]:
+                        normalizer = int(output_link_flow.shape[0] / self.flows.shape[0])
 
                     # We now use the definition of relative residual
                     relative_gap = (
-                            tf.norm(link_flow - self.flows, 1) / (normalizer * tf.norm(self.flows, 1))).numpy()
+                            tf.norm(output_link_flow - self.flows, 1) / (normalizer * tf.norm(self.flows, 1))).numpy()
                     relative_gaps.append(relative_gap)
 
                 # print(f"{i}: loss={loss.numpy():0.4g}, theta = {model.theta.numpy()}")
