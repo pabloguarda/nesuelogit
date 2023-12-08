@@ -57,6 +57,7 @@ def plot_metrics_kfold(df, metric_name = 'mape', benchmark_name = 'historical me
     ax.set_title('start of model training')
     ax.set_ylabel(metric_name)
     ax.set_xlabel('loss component')
+    ax.legend(loc='upper right')
 
     # fig, ax = plt.subplots()
     ax = axs[0, 1]
@@ -66,6 +67,7 @@ def plot_metrics_kfold(df, metric_name = 'mape', benchmark_name = 'historical me
     ax.set_title('end of model training')
     ax.set_ylabel(metric_name)
     ax.set_xlabel('loss component')
+    ax.legend(loc='upper right')
 
     df = df[df['stage'].isin([benchmark_name, 'model'])]
     df['stage'] = pd.Categorical(df['stage'], categories=[benchmark_name, 'model'])
@@ -78,7 +80,7 @@ def plot_metrics_kfold(df, metric_name = 'mape', benchmark_name = 'historical me
     ax.set_title('training set')
     ax.set_ylabel(metric_name)
     ax.set_xlabel('loss component')
-    ax.legend(title=None)
+    ax.legend(title=None, loc='upper right')
 
     # fig, axs = plt.subplots()
     ax = axs[1, 1]
@@ -90,7 +92,7 @@ def plot_metrics_kfold(df, metric_name = 'mape', benchmark_name = 'historical me
     ax.set_title('validation set')
     ax.set_ylabel(metric_name)
     ax.set_xlabel('loss component')
-    ax.legend(title=None)
+    ax.legend(title=None, loc='upper right')
 
     for ax in axs.reshape(-1):
         # ax.get_legend().remove()
@@ -1112,7 +1114,7 @@ def plot_congestion_maps(model, model_df: pd.DataFrame, gdf: gpd.GeoDataFrame, f
         ax.set_xticklabels([])
         ax.set_yticklabels([])
 
-    legend = axs[1].get_legend()
+    legend = axs[3].get_legend()
     #Get rid of first interval with -infinity
     handles = legend.legendHandles[1:]
     labels = [text.get_text() for text in legend.texts[1:]]
