@@ -47,12 +47,18 @@ def mape(actual: tf.Tensor, predicted: tf.Tensor, weight = 1):
 
     return 100*weight*tf.reduce_mean(tf.abs(error(actual, predicted, mask = mask))/tf.boolean_mask(actual, mask))
 
-def median_absolute_percentage_error(actual: tf.Tensor, predicted: tf.Tensor):
+def mdape(actual: tf.Tensor, predicted: tf.Tensor):
+    ''' Median absolute percentage error:
+    Skip cases where the observed values are equal to zero or nan to avoid getting an undefined mape
+    '''
+
+    actual, predicted = [tf.cast(tf.constant(i), tf.float32) if not isinstance(i,tf.Tensor) else tf.cast(i, tf.float32)
+                         for i in [actual, predicted]]
 
     mask = tf.cast(tf.math.is_finite(actual), tf.int32) * tf.cast(actual > 0, tf.int32)
 
     # y_true, y_pred = np.array(actual), np.array(predicted)
-    return np.median(tf.abs(error(actual, predicted, mask = mask))/tf.boolean_mask(actual, mask)) * 100
+    return 100*np.median(tf.abs(error(actual, predicted, mask = mask))/tf.boolean_mask(actual, mask))
 
 def median_percentage_error(actual: tf.Tensor, predicted: tf.Tensor):
 
