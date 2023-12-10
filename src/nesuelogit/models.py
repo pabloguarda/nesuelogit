@@ -12,7 +12,8 @@ import os
 from typing import Dict, List, Tuple, Union
 
 import pesuelogit
-from nesuelogit.metrics import error, mse, sse, rmse, nrmse, nmse, btcg_mse, mnrmse, l1norm, mape, r2_score, zscore, z2score
+from nesuelogit.metrics import error, mse, sse, rmse, nrmse, nmse, btcg_mse, mnrmse, mdape, mape, r2_score, zscore, \
+    z2score
 from nesuelogit.utils import timeit
 from pesuelogit.models import PESUELOGIT, normalize_od, compute_rr
 
@@ -50,18 +51,19 @@ def mask_observed_flow(flow, D):
 
 
 def mask_observed_traveltime(traveltime, k, tt_ff, k_threshold=1e5):
-
     mask1 = np.where((k >= k_threshold), float('nan'), 1)
     mask2 = np.where((tt_ff == 0), float('nan'), 1)
 
     return mask2 * mask1 * traveltime
 
+
 def mask_Y(Y, k, tt_ff, D):
     observed_traveltime, observed_flow = tf.unstack(Y, axis=-1)
-    observed_traveltime = mask_observed_traveltime(observed_traveltime, k = k, tt_ff = tt_ff)
-    observed_flow =mask_observed_flow(observed_flow, D = D)
+    observed_traveltime = mask_observed_traveltime(observed_traveltime, k=k, tt_ff=tt_ff)
+    observed_flow = mask_observed_flow(observed_flow, D=D)
 
     return tf.stack([observed_traveltime, observed_flow], axis=2)
+
 
 def get_period_ids(period_column: np.array, period_dict=None):
     """
@@ -86,7 +88,7 @@ def get_period_ids(period_column: np.array, period_dict=None):
 
 
 def compute_generated_trips(q, ods, n_nodes, **kwargs):
-    od_parameters = ODParameters(ods=ods, n_nodes = n_nodes, trainable=False, initial_values=None)
+    od_parameters = ODParameters(ods=ods, n_nodes=n_nodes, trainable=False, initial_values=None)
 
     return od_parameters.compute_generated_trips(values=q, **kwargs)
 
@@ -111,6 +113,7 @@ def normalized_losses(losses: pd.DataFrame) -> pd.DataFrame:
     losses[columns] = losses[columns] / losses[losses['epoch'] == losses['epoch'].min()][columns].values
 
     return losses
+
 
 def utility_parameters_periods(model, period_feature, period_keys, include_vot=False):
     theta_df = pd.DataFrame({})
@@ -239,9 +242,8 @@ class ODParameters(pesuelogit.models.ODParameters):
         self._features_generation = features_generation
         self._features_distribution = features_distribution
 
-
     @property
-    def  historic_values_array(self):
+    def historic_values_array(self):
         # historic_od = tf.expand_dims(tf.constant(self.network.q.flatten()), axis=0)
         # if len(list(self.historic_values.keys())) > 1:
 
@@ -291,7 +293,7 @@ class ODParameters(pesuelogit.models.ODParameters):
 
     @n_nodes.setter
     def n_nodes(self, value):
-       self._n_nodes = value
+        self._n_nodes = value
 
     @property
     def L_sparse(self):
@@ -349,7 +351,7 @@ class ODParameters(pesuelogit.models.ODParameters):
 
 class PerformanceFunction(tf.keras.layers.Layer):
 
-    def __init__(self, type, max_traveltime_factor = None, *args, **kwargs):
+    def __init__(self, type, max_traveltime_factor=None, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
         self.type = type
@@ -382,9 +384,9 @@ class KernelConstraint(tf.keras.constraints.Constraint):
                  diagonal: bool = False,
                  symmetric: bool = False,
                  homogenous: bool = False,
-                 initial_values = None,
-                 bounds_clipping: [float,float] = None,
-                 min_diagonal_value = 1e-8,
+                 initial_values=None,
+                 bounds_clipping: [float, float] = None,
+                 min_diagonal_value=1e-8,
                  link_keys: List[Tuple[int, int]] = None,
                  dtype=tf.float32,
                  adjacency_constraint: bool = False):
@@ -410,7 +412,8 @@ class KernelConstraint(tf.keras.constraints.Constraint):
 
         self.min_diagonal_value = min_diagonal_value
 
-        assert self.min_diagonal_value>=self.bounds_clipping[0] and  self.min_diagonal_value <=self.bounds_clipping[1], \
+        assert self.min_diagonal_value >= self.bounds_clipping[0] and self.min_diagonal_value <= self.bounds_clipping[
+            1], \
             "Minimum value of diagonal must be between the bounds defined by bounds_clipping argument"
 
         self.adjacency_constraint = adjacency_constraint
@@ -432,7 +435,7 @@ class KernelConstraint(tf.keras.constraints.Constraint):
             # self.kernel_constraint.initial_values = 1e-1*tf.ones((self.n_links,self.n_links), dtype = tf.float32)
             # self.kernel_constraint.initial_values = tf.ones((self.n_links, self.n_links), dtype=tf.float32)
             # Assign 0 as initial values of the adjacency constraint terms
-            self.initial_values = tf.ones((self.n_links,self.n_links), dtype=self.dtype)
+            self.initial_values = tf.ones((self.n_links, self.n_links), dtype=self.dtype)
 
         self.constraint_matrix = tf.ones((self.n_links, self.n_links), dtype=self.dtype)
 
@@ -443,7 +446,6 @@ class KernelConstraint(tf.keras.constraints.Constraint):
             self.constraint_matrix *= tf.eye(self.n_links)
 
         self.initial_values *= self.constraint_matrix
-
 
     def create_adjacency_constraint_matrix(self, link_keys: List[Tuple], dtype=None):
 
@@ -468,7 +470,6 @@ class KernelConstraint(tf.keras.constraints.Constraint):
 
         return matrix
 
-
     def __call__(self, W):
         # return tf.linalg.diag_part(w)*tf.eye(w.shape[0])
         # return tf.clip_by_value(tf.linalg.diag_part(w) * tf.eye(w.shape[0]), clip_value_min=0, clip_value_max=1)
@@ -483,22 +484,22 @@ class KernelConstraint(tf.keras.constraints.Constraint):
             # Note that the operation below will not affect the symmetry of the matrix
 
         W = tf.clip_by_value(W,
-                         clip_value_min=self.bounds_clipping[0],
-                         # clip_value_min=0,
-                         clip_value_max=self.bounds_clipping[1]
-                         # clip_value_max=10
-                         )
+                             clip_value_min=self.bounds_clipping[0],
+                             # clip_value_min=0,
+                             clip_value_max=self.bounds_clipping[1]
+                             # clip_value_max=10
+                             )
 
         W_old_diagonal = tf.linalg.diag_part(W) * tf.eye(W.shape[0])
 
         # W_new_diagonal = tf.linalg.diag_part(W)* tf.eye(W.shape[0])
         W_new_diagonal = tf.linalg.diag_part(tf.clip_by_value(W_old_diagonal,
-                                          clip_value_min= self.min_diagonal_element,
-                                          # clip_value_min=0,
-                                          clip_value_max= self.bounds_clipping[1],
-                                          # clip_value_max=10
+                                                              clip_value_min=self.min_diagonal_element,
+                                                              # clip_value_min=0,
+                                                              clip_value_max=self.bounds_clipping[1],
+                                                              # clip_value_max=10
 
-                                          )) * tf.eye(W.shape[0])
+                                                              )) * tf.eye(W.shape[0])
         # if self.homogenous:
         #     # Only average over terms that are greater than zero.
         #     self.W = tf.cast(tf.where(self.W > 0, 1, 0), self.W.dtype) * tf.reduce_mean(self.W[self.W > 0])
@@ -517,17 +518,18 @@ class KernelConstraint(tf.keras.constraints.Constraint):
 
         return self.W
 
+
 class PolynomialLayer(tf.keras.layers.Layer):
     def __init__(self,
-                 dtype = tf.float32,
-                 poly_order = 1,
-                 trainable = True,
-                 pretrain_weights = False,
-                 alpha_prior = 0.15,
-                 beta_prior = 4,
-                 kernel_constraint = None,
-                 link_specific = False,
-                 alpha_relu = 0,
+                 dtype=tf.float32,
+                 poly_order=1,
+                 trainable=True,
+                 pretrain_weights=False,
+                 alpha_prior=0.15,
+                 beta_prior=4,
+                 kernel_constraint=None,
+                 link_specific=False,
+                 alpha_relu=0,
                  *args,
                  **kwargs
                  ):
@@ -551,7 +553,7 @@ class PolynomialLayer(tf.keras.layers.Layer):
     def poly_weights(self):
         return tf.exp(self._poly_weights)
 
-    def build(self, n_poly_features = None, n_links = None):
+    def build(self, n_poly_features=None, n_links=None):
 
         if n_links is None:
             n_links = self.n_links
@@ -570,9 +572,9 @@ class PolynomialLayer(tf.keras.layers.Layer):
         self._poly_weights = tf.Variable(
             # self.bpr.parameters['alpha'].initial_value,
             # initial_value=np.log(self.initial_values['alpha']),
-            initial_value= initial_value,
+            initial_value=initial_value,
             # np.sqrt(self.bpr.parameters['alpha'].initial_value),
-            trainable= self.trainable_layer,
+            trainable=self.trainable_layer,
             name='poly_weights',
             dtype=self.dtype)
 
@@ -615,13 +617,13 @@ class PolynomialLayer(tf.keras.layers.Layer):
         flows /= capacities
 
         flows = tf.cast(tf.concat([list(map(lambda x: self.poly.fit_transform(tf.transpose(x)),
-                                            tf.split(flows, flows.shape[0])))], axis =2), dtype = self.dtype)
+                                            tf.split(flows, flows.shape[0])))], axis=2), dtype=self.dtype)
 
         return flows
 
-    def transform_flows(self, flows, capacities, period_ids, n_periods = None):
+    def transform_flows(self, flows, capacities, period_ids, n_periods=None):
 
-        flows = self.map_flows(flows = flows, capacities=capacities)
+        flows = self.map_flows(flows=flows, capacities=capacities)
         n_links = len(capacities)
 
         if not self._built:
@@ -642,10 +644,9 @@ class PolynomialLayer(tf.keras.layers.Layer):
             flows = tf.einsum("ijk,lk -> ij", flows, self.poly_weights)
 
         if flows.shape[0] == n_periods:
-            return tf.cast(tf.experimental.numpy.take(flows, tf.cast(period_ids[:,0], dtype=tf.int32), 0), self.dtype)
+            return tf.cast(tf.experimental.numpy.take(flows, tf.cast(period_ids[:, 0], dtype=tf.int32), 0), self.dtype)
         else:
             return flows
-
 
     def pretrain_weights(self, flows, free_flow_traveltimes, capacities):
         """
@@ -663,21 +664,21 @@ class PolynomialLayer(tf.keras.layers.Layer):
 
         t = tt_ff * (1 + self.alpha_prior * tf.math.pow(flows / capacities, self.beta_prior))
 
-        y = (t/tt_ff-1)/self.alpha_prior
-        X = self.map_flows(flows, capacities = capacities)
+        y = (t / tt_ff - 1) / self.alpha_prior
+        X = self.map_flows(flows, capacities=capacities)
 
         # Reshape array to match sklearn format
-        y = y.numpy().reshape(-1,1)
-        X = X.numpy().reshape(-1,X.shape[2])
+        y = y.numpy().reshape(-1, 1)
+        X = X.numpy().reshape(-1, X.shape[2])
 
         # Remove rows with nan values
-        X,y = X[(~np.isnan(y)).flatten()], y[~np.isnan(y).flatten()]
+        X, y = X[(~np.isnan(y)).flatten()], y[~np.isnan(y).flatten()]
 
         positive = False
         if isinstance(self.kernel_constraint, tf.keras.constraints.NonNeg):
             positive = True
 
-        reg = LinearRegression(fit_intercept=False, positive = positive).fit(X = X, y = y)
+        reg = LinearRegression(fit_intercept=False, positive=positive).fit(X=X, y=y)
         # reg = LinearRegression(fit_intercept=False).fit(y, X)
 
         coefs = reg.coef_
@@ -690,7 +691,7 @@ class PolynomialLayer(tf.keras.layers.Layer):
 
         # self.weights[0].assign(coefs.reshape(self.weights[0].shape))
         with block_output(show_stdout=False, show_stderr=False):
-            self._poly_weights.assign(np.log(tf.repeat(coefs, self._poly_weights.shape[0], axis =0)))
+            self._poly_weights.assign(np.log(tf.repeat(coefs, self._poly_weights.shape[0], axis=0)))
 
         # self.model.trainable = self.trainable_layer
 
@@ -708,10 +709,9 @@ class PolynomialLayer(tf.keras.layers.Layer):
 
 class SingleWeightLayer(tf.keras.layers.Layer):
     def __init__(self,
-                 initial_value = 1,
+                 initial_value=1,
                  *args,
                  **kwargs):
-
         super().__init__(*args, **kwargs)
 
         self.initial_value = initial_value
@@ -721,22 +721,23 @@ class SingleWeightLayer(tf.keras.layers.Layer):
                                       dtype=self.dtype,
                                       # constraint = tf.keras.constraints.NonNeg()
                                       )
+
     @property
     def parameter(self):
         return tf.exp(self._parameter)
 
     def call(self, input):
-        return self.parameter*input
+        return self.parameter * input
+
 
 class KernelWeightLayer(tf.keras.layers.Layer):
     def __init__(self,
-                 initial_value_diagonal = None,
-                 initial_value_nondiagonal = None,
-                 n_links = None,
-                 kernel_constraint = None,
+                 initial_value_diagonal=None,
+                 initial_value_nondiagonal=None,
+                 n_links=None,
+                 kernel_constraint=None,
                  *args,
                  **kwargs):
-
         super().__init__(*args, **kwargs)
 
         self.initial_value_diagonal = initial_value_diagonal
@@ -746,21 +747,22 @@ class KernelWeightLayer(tf.keras.layers.Layer):
         self.kernel_constraint = kernel_constraint
 
     def build(self, input_shape):
-        self._diagonal_parameters = tf.Variable(np.log(self.initial_value_diagonal*tf.ones(self.n_links)),
-                                      dtype=self.dtype,
-                                      name = 'diagonal_kernel_matrix'
-                                      # constraint = tf.keras.constraints.NonNeg()
-                                      )
+        self._diagonal_parameters = tf.Variable(np.log(self.initial_value_diagonal * tf.ones(self.n_links)),
+                                                dtype=self.dtype,
+                                                name='diagonal_kernel_matrix'
+                                                # constraint = tf.keras.constraints.NonNeg()
+                                                )
 
-        self._nondiagonal_parameters = tf.Variable(self.initial_value_nondiagonal*tf.ones((self.n_links,self.n_links)),
-                                        dtype=self.dtype,
-                                        name='nondiagonal_kernel_matrix'
-                                        # constraint = tf.keras.constraints.NonNeg()
-                                        )
+        self._nondiagonal_parameters = tf.Variable(
+            self.initial_value_nondiagonal * tf.ones((self.n_links, self.n_links)),
+            dtype=self.dtype,
+            name='nondiagonal_kernel_matrix'
+            # constraint = tf.keras.constraints.NonNeg()
+        )
 
     @property
     def kernel_matrix(self):
-        self._kernel_matrix = tf.exp(self._diagonal_parameters)*tf.eye(self.n_links) \
+        self._kernel_matrix = tf.exp(self._diagonal_parameters) * tf.eye(self.n_links) \
                               + self._nondiagonal_parameters - tf.linalg.diag_part(self._nondiagonal_parameters)
 
         self._kernel_matrix = self.kernel_constraint(self._kernel_matrix)
@@ -768,20 +770,21 @@ class KernelWeightLayer(tf.keras.layers.Layer):
         return self._kernel_matrix
 
     def call(self, input):
-        return tf.matmul(input,self.kernel_matrix)
+        return tf.matmul(input, self.kernel_matrix)
+
 
 class MLP(PerformanceFunction):
 
     def __init__(self,
                  n_links,
                  dropout: float = 0.2,
-                 alpha_relu = 0,
+                 alpha_relu=0,
                  depth: int = 1,
-                 polynomial_layer = None,
+                 polynomial_layer=None,
                  free_flow_traveltimes=None,
                  capacities=None,
                  kernel_constraint=None,
-                 trainable = True,
+                 trainable=True,
                  *args,
                  **kwargs):
         super().__init__(*args, type='mlp', **kwargs)
@@ -803,7 +806,6 @@ class MLP(PerformanceFunction):
         #     self.capacities = tf.repeat(tf.constant(self.capacities)[:, None], self.n_poly_features, 1)
 
         # self.weights_performance_function = tf.Variable(tf.ones(n_links,dtype = self.dtype))
-
 
         if free_flow_traveltimes is not None:
             self.bias_initializer = tf.constant_initializer(free_flow_traveltimes)
@@ -833,8 +835,8 @@ class MLP(PerformanceFunction):
 
             self.model.add(KernelWeightLayer(initial_value_diagonal=1,
                                              initial_value_nondiagonal=1e-1,
-                                             n_links = self.n_links,
-                                             kernel_constraint= self.kernel_constraint,
+                                             n_links=self.n_links,
+                                             kernel_constraint=self.kernel_constraint,
                                              name='link_flow_interaction_matrix'))
 
         # else:
@@ -857,7 +859,6 @@ class MLP(PerformanceFunction):
         #     self.model.add(tf.keras.layers.LeakyReLU(self.alpha_relu))
         #     # self.model.add(tf.keras.layers.PReLU())
 
-
         # if kernel_constraint is None or (self.kernel_constraint.diagonal is False):
         #     self.model.add(tf.keras.layers.ReLU())
         #     # tf.keras.layers.LeakyReLU(0.1)
@@ -866,7 +867,7 @@ class MLP(PerformanceFunction):
 
         # Build parameters polynomial layer if it has been provided
         if self.polynomial_layer is not None and not self.polynomial_layer.built:
-            self.polynomial_layer.build(n_links = self.n_links)
+            self.polynomial_layer.build(n_links=self.n_links)
 
     def regularizer(self, regularizer):
 
@@ -916,7 +917,7 @@ class MLP(PerformanceFunction):
     # self.model.get_weights()
 
 
-def bpr_function(flows, capacities, free_flow_traveltimes, alpha = 0.15, beta = 4):
+def bpr_function(flows, capacities, free_flow_traveltimes, alpha=0.15, beta=4):
     """
     Apply BPR function to input link flows
     """
@@ -926,16 +927,17 @@ def bpr_function(flows, capacities, free_flow_traveltimes, alpha = 0.15, beta = 
 
     return traveltimes
 
+
 class BPR(PerformanceFunction):
 
     def __init__(self,
                  capacities=None,
                  free_flow_traveltimes=None,
                  dtype=None,
-                 max_traveltime_factor = None,
+                 max_traveltime_factor=None,
                  *args,
                  **kwargs):
-        super().__init__(dtype=dtype, type='bpr', max_traveltime_factor = max_traveltime_factor)
+        super().__init__(dtype=dtype, type='bpr', max_traveltime_factor=max_traveltime_factor)
 
         self.parameters = pesuelogit.models.BPRParameters(*args, **kwargs)
         self.k = tf.constant(capacities, dtype=self.dtype)
@@ -1049,15 +1051,14 @@ class NESUELOGIT(PESUELOGIT):
     #
     #     return tensor
 
+    def update_predictions(self, X, period_dict=None, update_period_dict=False):
 
-    def update_predictions(self, X, period_dict = None, update_period_dict = False):
+        self.set_period_ids(X.numpy(), period_dict, update_period_dict=update_period_dict)
+        self.period_ids = X[:, :, -1]
 
-        self.set_period_ids(X.numpy(), period_dict, update_period_dict= update_period_dict)
-        self.period_ids = X[:,:,-1]
-
-        self._predicted_traveltime = self.predict_traveltime()
         self._output_flow = self.output_flow(X)
         self._predicted_flow = self.predict_flow()
+        self._predicted_traveltime = self.predict_traveltime()
 
     def compute_loss_metric(self,
                             metric=mse,
@@ -1101,7 +1102,7 @@ class NESUELOGIT(PESUELOGIT):
         metrics_df = pd.DataFrame({})
 
         for name, metric in metrics.items():
-            metrics_components = self.compute_loss_metric(metric=metric, prefix_metric='', X = X, Y = Y)
+            metrics_components = self.compute_loss_metric(metric=metric, prefix_metric='', X=X, Y=Y)
             metrics_df = pd.concat([metrics_df,
                                     pd.DataFrame({'component': metrics_components.keys(),
                                                   'value': metrics_components.values(),
@@ -1136,7 +1137,7 @@ class NESUELOGIT(PESUELOGIT):
         # predicted_traveltimes = tf.stop_gradient(self.traveltimes())
         self._predicted_traveltime = self.predict_traveltime()
 
-    def equilibrium_loss(self, input_flow, output_flow, observed_flow, Y, loss_metric = mse):
+    def equilibrium_loss(self, input_flow, output_flow, observed_flow, Y, loss_metric=mse):
 
         """ 
         Equilibrium loss is normalized depending on the loss metric used to compute the link flow loss
@@ -1165,7 +1166,7 @@ class NESUELOGIT(PESUELOGIT):
             loss = mse(actual=input_flow, predicted=output_flow)
 
             if Y is not None:
-                loss /= tf.experimental.numpy.nanmean(observed_flow)**2
+                loss /= tf.experimental.numpy.nanmean(observed_flow) ** 2
 
         elif loss_metric == z2score:
 
@@ -1174,7 +1175,7 @@ class NESUELOGIT(PESUELOGIT):
 
             if Y is not None:
                 # loss /= np.nanstd(observed_flow)**2
-                loss /= np.nanstd(observed_flow)**2
+                loss /= np.nanstd(observed_flow) ** 2
 
         else:
             loss = loss_metric(actual=input_flow, predicted=output_flow)
@@ -1194,26 +1195,26 @@ class NESUELOGIT(PESUELOGIT):
     def observed_flow(self, Y=None):
 
         if Y is None:
-            return  self.mask_observed_flow(self._observed_flow)
+            return self.mask_observed_flow(self._observed_flow)
         #
         # return self.mask_observed_flow(tf.unstack(Y, axis=-1)[1])
-        return self.mask_observed_flow(flow = tf.unstack(Y, axis=-1)[1])
+        return self.mask_observed_flow(flow=tf.unstack(Y, axis=-1)[1])
 
     def mask_Y(self, Y):
 
         # observed_traveltime = self.mask_observed_traveltime(observed_traveltime)
         # observed_flow = self.mask_observed_flow(observed_flow)
 
-        return mask_Y(Y = Y,
-                      k = np.array([link.bpr.k for link in self.network.links]),
-                      tt_ff = self.tt_ff,
-                      D = self.D)
+        return mask_Y(Y=Y,
+                      k=np.array([link.bpr.k for link in self.network.links]),
+                      tt_ff=self.tt_ff,
+                      D=self.D)
 
     def mask_observed_flow(self, flow):
 
-        return mask_observed_flow(flow = flow, D = self.D)
+        return mask_observed_flow(flow=flow, D=self.D)
 
-    def mask_observed_traveltime(self, traveltime, k = None, k_threshold = 1e5):
+    def mask_observed_traveltime(self, traveltime, k=None, k_threshold=1e5):
 
         if k is None:
             k = np.array([link.bpr.k for link in self.network.links])
@@ -1223,23 +1224,22 @@ class NESUELOGIT(PESUELOGIT):
         #
         # return mask2*mask1*traveltime
 
-        return mask_observed_traveltime(traveltime = traveltime,
-                                        k = k,
+        return mask_observed_traveltime(traveltime=traveltime,
+                                        k=k,
                                         tt_ff=self.tt_ff,
-                                        k_threshold = k_threshold
+                                        k_threshold=k_threshold
                                         )
 
     def compute_regularization_loss(self, lambda_vals):
 
         loss = {}
 
-        if self.performance_function.type == 'mlp' and lambda_vals['regularizer_kernel']>0:
+        if self.performance_function.type == 'mlp' and lambda_vals['regularizer_kernel'] > 0:
             regularizer = tf.keras.regularizers.L1(lambda_vals['regularizer_kernel'])
             loss['regularizer_kernel'] = self.performance_function.regularizer(regularizer)
 
         # Only for model that has a generation stage
-        if lambda_vals['regularizer_utility_ods']>0 and self.kappa is not None:
-
+        if lambda_vals['regularizer_utility_ods'] > 0 and self.kappa is not None:
             regularizer = tf.keras.regularizers.L1(lambda_vals['regularizer_utility_ods'])
             loss['regularizer_utility_ods'] = regularizer(self.utility_ods)
 
@@ -1279,7 +1279,7 @@ class NESUELOGIT(PESUELOGIT):
         lambdas_vals = {'traveltime': 0.0, 'od': 0.0, 'theta': 0.0, 'flow': 0.0, 'equilibrium': 0.0,
                         'bpr': 0, 'ntrips': 0, 'prop_od': 0}
 
-        regularization_vals = {'regularizer_kernel': 0, 'regularizer_utility_ods': 0, 'regularizer_od': 0,}
+        regularization_vals = {'regularizer_kernel': 0, 'regularizer_utility_ods': 0, 'regularizer_od': 0, }
 
         lambdas_vals = {**lambdas_vals, **regularization_vals}
 
@@ -1301,11 +1301,11 @@ class NESUELOGIT(PESUELOGIT):
         #                              predicted = compute_generated_trips(self.q, ods = self.od.ods))
 
         # Equilibrium loss
-        loss['equilibrium'] = self.equilibrium_loss(loss_metric = loss_metric,
-                                                    Y = Y,
-                                                    input_flow = self.input_flow,
-                                                    output_flow = self.output_flow(),
-                                                    observed_flow = self._observed_flow)
+        loss['equilibrium'] = self.equilibrium_loss(loss_metric=loss_metric,
+                                                    Y=Y,
+                                                    input_flow=self.input_flow,
+                                                    output_flow=self.output_flow(),
+                                                    observed_flow=self._observed_flow)
 
         historic_od = self.q.numpy()
         historic_od[:] = np.nan
@@ -1313,7 +1313,7 @@ class NESUELOGIT(PESUELOGIT):
         # if lambdas_vals['od'] > 0 and self.od.historic_values is not None and self.q is not None:
         if self.od.historic_values is not None and self.q is not None:
             historic_od = tf.cast(self.od.historic_values_array, self.dtype)
-            #historic_od = tf.cast(tf.stack(list(self.od.historic_values.values())), self.dtype)
+            # historic_od = tf.cast(tf.stack(list(self.od.historic_values.values())), self.dtype)
 
             loss.update({
                 'od': loss_metric(actual=historic_od, predicted=self.q),
@@ -1444,7 +1444,7 @@ class NESUELOGIT(PESUELOGIT):
 
         return initial_values
 
-    def mask_predicted_traveltimes(self, tt, k, k_threshold=1e5, max_factor = None):
+    def mask_predicted_traveltimes(self, tt, k, k_threshold=1e5, max_factor=None):
         """
 
         :param tt:
@@ -1474,7 +1474,7 @@ class NESUELOGIT(PESUELOGIT):
 
         # return self.tt_ff * (1 + self.alpha * tf.math.pow(x / k, self.beta))
 
-    def traveltimes(self, flows = None):
+    def traveltimes(self, flows=None):
         """ Return tensor variable associated to endogenous travel times (assumed dependent on link flows)"""
 
         if self.performance_function.type == 'bpr':
@@ -1488,21 +1488,21 @@ class NESUELOGIT(PESUELOGIT):
 
             flows = self.performance_function.polynomial_layer.transform_flows(
                 flows,
-                capacities = self.performance_function.capacities,
-                period_ids = self.period_ids,
-                n_periods = self.n_periods)
+                capacities=self.performance_function.capacities,
+                period_ids=self.period_ids,
+                n_periods=self.n_periods)
 
         traveltimes = self.performance_function.call(flows)
 
         traveltimes = self.mask_predicted_traveltimes(tt=traveltimes,
                                                       k=np.array([link.bpr.k for link in self.network.links]),
-                                                      max_factor = self.performance_function.max_traveltime_factor)
+                                                      max_factor=self.performance_function.max_traveltime_factor)
 
         return traveltimes
 
         # return tf.experimental.numpy.take(traveltimes,tf.cast(self.period_ids[:,0], dtype = tf.int32),0)
 
-    def output_traveltime(self, flows = None):
+    def output_traveltime(self, flows=None):
         """ Return tensor variable associated to endogenous travel times (assumed dependent on link flows)"""
 
         if self.performance_function.type == 'bpr':
@@ -1516,45 +1516,40 @@ class NESUELOGIT(PESUELOGIT):
 
             flows = self.performance_function.polynomial_layer.transform_flows(
                 flows,
-                capacities = self.performance_function.capacities,
-                period_ids = self.period_ids,
-                n_periods = self.n_periods)
+                capacities=self.performance_function.capacities,
+                period_ids=self.period_ids,
+                n_periods=self.n_periods)
 
         traveltimes = self.performance_function.call(flows)
 
         traveltimes = self.mask_predicted_traveltimes(tt=traveltimes,
                                                       k=np.array([link.bpr.k for link in self.network.links]),
-                                                      max_factor = self.performance_function.max_traveltime_factor)
+                                                      max_factor=self.performance_function.max_traveltime_factor)
 
         return traveltimes
 
     def predicted_traveltime(self):
-
         return self._predicted_traveltime
-
-    def predict_traveltime(self, flows = None):
-        return self.traveltimes()
-        # return self.output_traveltime(flows)
 
     def predicted_flow(self):
         return self._predicted_flow
 
-    def predict_flow(self, X = None):
+    def predict_traveltime(self, flows=None):
+        if self.key == 'tvodlulpe':
+            return self.traveltimes()
+        return self.output_traveltime(flows)
 
-        return self.input_flow
-        # return self.output_flow(X)
-
+    def predict_flow(self, X=None):
+        if self.key == 'tvodlulpe':
+            return self.input_flow
+        return self.output_flow(X)
 
     def class_membership_probabilities(self):
-
         n_classes = self.utility.n_classes
-
         raise NotImplementedError
 
     def link_utilities(self, X):
-
         """ TODO: Make the einsum operation in one line"""
-
         self.period_ids = X[:, :, -1]
         theta = tf.cast(tf.experimental.numpy.take(self.theta, tf.cast(self.period_ids[:, 0], self.dtype_int), 0),
                         dtype=self.dtype)
@@ -1572,9 +1567,7 @@ class NESUELOGIT(PESUELOGIT):
         to store the matrix C which has dimensions n_paths X n_paths
         tf.sparse.reduce_max has no gradient registered, thus this op is ignored from the backprop:
         https://www.tensorflow.org/api_docs/python/tf/stop_gradient
-
         #TODO: Optimize repetition of M_sparse matrix over days and hours dimensions
-
         '''
 
         M_sparse = tf.cast(tf.sparse.from_dense(self.network.M), self.dtype)
@@ -1637,7 +1630,8 @@ class NESUELOGIT(PESUELOGIT):
             # node_keys = pd.DataFrame({'key': [node for node, _ in self.od.ods]}).drop_duplicates()
             # node_keys = pd.DataFrame({'key': [node.key for node in self.network.nodes]})
             # node_keys = pd.DataFrame({'key': list(range(0, len([node.key for node in self.network.nodes])))})
-            node_keys = pd.DataFrame({'key': list(range(0, len([self.network.nodes[node_idx].key for node_idx in range(self.od.n_nodes)])))})
+            node_keys = pd.DataFrame(
+                {'key': list(range(0, len([self.network.nodes[node_idx].key for node_idx in range(self.od.n_nodes)])))})
 
             self._node_data = pd.merge(node_keys, self._node_data, on='key')
 
@@ -1686,7 +1680,7 @@ class NESUELOGIT(PESUELOGIT):
 
         X = np.concatenate([self.node_data, fixed_effect], axis=1)
 
-        kappa = np.ones((self.n_periods,len(self.generation.features)))
+        kappa = np.ones((self.n_periods, len(self.generation.features)))
         fixed_effect_generation = np.ones_like(self._fixed_effect_generation.numpy())
 
         for period in range(self.n_periods):
@@ -1698,7 +1692,7 @@ class NESUELOGIT(PESUELOGIT):
                 idxs_non_zeros = (y[period] != 0)
                 Xt, yt = X[idxs_non_zeros, :], y[period][idxs_non_zeros]
 
-            reg = LinearRegression(fit_intercept=False).fit(X = Xt, y = yt)
+            reg = LinearRegression(fit_intercept=False).fit(X=Xt, y=yt)
 
             if pvalues:
                 estimation = sm.OLS(yt, sm.add_constant(Xt)).fit()
@@ -1708,7 +1702,7 @@ class NESUELOGIT(PESUELOGIT):
             coefs = reg.coef_
 
             for i in range(self._kappa.shape[1]):
-                kappa[period,i] = coefs[i]
+                kappa[period, i] = coefs[i]
 
             fixed_effect_generation[period] = coefs[len(self.generation.features):]
 
@@ -1834,7 +1828,7 @@ class NESUELOGIT(PESUELOGIT):
         return q
 
     @property
-    def Q(self, average = False):
+    def Q(self, average=False):
 
         if average and tf.rank(self.q) == 2:
             q = tf.reduce_mean(self.q, axis=0)
@@ -1845,8 +1839,7 @@ class NESUELOGIT(PESUELOGIT):
                 dense_shape=(self.n_periods, self.n_nodes, self.n_nodes)
             )
 
-        return tf.sparse.to_dense(self.od.get_sparse_tensor(values = self.q))
-
+        return tf.sparse.to_dense(self.od.get_sparse_tensor(values=self.q))
 
     def create_tensor_variables(self, keys: Dict[str, bool] = None,
                                 trainables: Dict[str, bool] = None,
@@ -1876,7 +1869,7 @@ class NESUELOGIT(PESUELOGIT):
             'flows': tf.constant(tf.zeros([self.n_periods, self.n_links], dtype=self.dtype)),
             # 'flows': tf.constant(tf.zeros([self.n_links], dtype=self.dtype)),
             # 'q': tf.cast(self.od.initial_values_array(), self.dtype),
-            'q':  tf.cast(self.od.initial_values_array(), self.dtype) if len(self.od.initial_value.shape) == 1 else
+            'q': tf.cast(self.od.initial_values_array(), self.dtype) if len(self.od.initial_value.shape) == 1 else
             tf.cast(self.od.initial_value, self.dtype),
             'theta': tf.cast(self.utility.initial_values_array(self.utility.features), self.dtype),
             'kappa': tf.cast(self.generation.initial_values_array(
@@ -1899,7 +1892,7 @@ class NESUELOGIT(PESUELOGIT):
             initial_value=tf.math.sqrt(initial_values['flows']),
             # initial_value=initial_values['flows'],
             # initial_value=tf.constant(tf.zeros([self.n_timepoints,self.n_links]), dtype=self.dtype),
-            trainable=trainables['flows'],
+            trainable= trainables['flows'],
             name='flows',
             dtype=self.dtype)
 
@@ -1963,7 +1956,6 @@ class NESUELOGIT(PESUELOGIT):
             # initial_values['fixed_effect_generation'] \
             #      = self.generation.initial_values['fixed_effect'] * tf.ones((self.n_periods, len(self.od.nodes)))
 
-
             # Link specific effect (act as an intercept)
             self._fixed_effect_generation = tf.Variable(
                 initial_value=tf.cast(initial_values['fixed_effect_generation'], dtype=self.dtype),
@@ -2026,12 +2018,12 @@ class NESUELOGIT(PESUELOGIT):
 
         # Create parameters of performance function
         self.performance_function.build()
-    
+
     @property
     def input_flow(self):
         return self.flows
-    
-    def output_flow(self, X = None):
+
+    def output_flow(self, X=None):
 
         if X is None:
             return self._output_flow
@@ -2102,7 +2094,7 @@ class NESUELOGIT(PESUELOGIT):
     # @tf.function(
     #     input_signature=[tf.TensorSpec(shape=(None, None, None))]
     # )
-    def predict(self, X: tf.Tensor, pretrain_generation_weights = False,
+    def predict(self, X: tf.Tensor, pretrain_generation_weights=False,
                 dtype=tf.float32, period_dict: Dict = None, **kwargs):
 
         """
@@ -2115,15 +2107,14 @@ class NESUELOGIT(PESUELOGIT):
         if self.generation is not None:
             self.generation._pretrain_generation_weights = pretrain_generation_weights
 
-        # sum = np.sum(X[:, :, -1])
-        self.compute_equilibrium(X, **kwargs)
-        # assert sum == np.sum(X[:, :, -1])
+        if kwargs.get('equilibrium_stage', True):
+            self.compute_equilibrium(X, **kwargs)
 
         self.update_predictions(X, period_dict)
 
         predicted_flow = self.predict_flow()
 
-        predicted_traveltime = self.traveltimes()
+        predicted_traveltime = self.predict_traveltime() #self.traveltimes()
 
         return tf.cast(tf.concat([predicted_traveltime[:, :, np.newaxis], predicted_flow[:, :, np.newaxis]], axis=2),
                        dtype)
@@ -2243,8 +2234,9 @@ class NESUELOGIT(PESUELOGIT):
             epochs: Dict[str, int] = None,
             threshold_relative_gap: float = float('inf'),
             loss_metric=None,
+            evaluation_metric = mape,
             momentum_equilibrium=1,
-            pretrain_link_flows = False,
+            pretrain_link_flows=False,
             equilibrium_stage=False,
             alternating_optimization=False,
             relative_losses=True,
@@ -2256,7 +2248,28 @@ class NESUELOGIT(PESUELOGIT):
 
         print('\nModel training')
 
+        if epochs_print_interval is None:
+            epochs_print_interval = {'learning': 1, 'equilibrium': 1}
+        else:
+            if 'learning' not in epochs_print_interval.keys() or epochs_print_interval['learning'] <= 0:
+                epochs_print_interval['learning'] = 1
+            if 'equilibrium' not in epochs_print_interval.keys() or epochs_print_interval['equilibrium'] <= 0:
+                epochs_print_interval['equilibrium'] = 1
+
+        if 'learning' not in epochs.keys() or epochs['learning'] < 0:
+            epochs['learning'] = 0
+
+        if 'equilibrium' not in epochs.keys() or epochs['equilibrium'] < 0:
+            epochs['equilibrium'] = 0
+
+        metric_name = evaluation_metric.__name__
+        prefix_metric = metric_name + '_'
+
         if not self.built:
+            self.endogenous_flows = True
+            if loss_weights['equilibrium'] == 0:
+                #In these cases, the input link flows are not identifiable, thus, they should be non-trainable.
+                self.endogenous_flows = False
             # with tf.compat.v1.variable_scope('model'):
             self.build()
 
@@ -2267,7 +2280,6 @@ class NESUELOGIT(PESUELOGIT):
                                                                node_data=node_data)
 
         # Mask observed flow and travel time
-
 
         if self.generation is not None and self.generation.pretrain_generation_weights:
             self.pretrain_generation_weights()
@@ -2292,10 +2304,10 @@ class NESUELOGIT(PESUELOGIT):
 
         # Pretrained polynomial weights
         if self.performance_function.type == 'mlp' and self.performance_function.polynomial_layer._pretrain_weights:
-                self.performance_function.polynomial_layer.pretrain_weights(
-                    flows = tf.math.pow(self._flows, 2),
-                    free_flow_traveltimes=self.tt_ff,
-                    capacities=self.performance_function.capacities)
+            self.performance_function.polynomial_layer.pretrain_weights(
+                flows=tf.math.pow(self._flows, 2),
+                free_flow_traveltimes=self.tt_ff,
+                capacities=self.performance_function.capacities)
 
         # Split data by batch
         if batch_size is None:
@@ -2320,7 +2332,7 @@ class NESUELOGIT(PESUELOGIT):
         train_losses = [train_loss]
 
         if Y_train is not None:
-            train_losses = [{**train_losses[0], **self.compute_loss_metric(metric=mape, prefix_metric='mape_')}]
+            train_losses = [{**train_losses[0], **self.compute_loss_metric(metric=evaluation_metric, prefix_metric=prefix_metric)}]
 
         # # Set inital travel time loss with free flow travel times
         # train_losses[-1]['loss_traveltime'] = mse(actual=self.observed_traveltime(Y=Y_train),
@@ -2331,18 +2343,9 @@ class NESUELOGIT(PESUELOGIT):
         if X_val is not None and Y_val is not None:
             val_loss = {k: float(v)
                         for k, v in self.loss_function(X=X_val, Y=Y_val, lambdas=loss_weights, loss_metric=mse).items()}
-            val_losses = [{**val_loss, **self.compute_loss_metric(metric=mape, prefix_metric='mape_')}]
+            val_losses = [{**val_loss, **self.compute_loss_metric(metric=evaluation_metric, prefix_metric=prefix_metric)}]
             # val_losses[-1]['loss_traveltime'] = mse(actual=self.observed_traveltime(Y=Y_val),
             #                               predicted=[link.bpr.tf for link in self.network.links])
-
-        if epochs_print_interval is None:
-            epochs_print_interval = {'learning': 1, 'equilibrium': 1}
-
-        if 'equilibrium' not in epochs.keys():
-            epochs['equilibrium'] = 0
-
-        if 'learning' not in epochs.keys():
-            epochs['learning'] = 0
 
         # Coverage of observed link flows and travel times
         coverages = {'train': float('nan'), 'val': float('nan')}
@@ -2365,21 +2368,24 @@ class NESUELOGIT(PESUELOGIT):
         t0 = time.time()
 
         total_epochs = epochs['learning']
+        # relative_gap = float('inf')
 
         if equilibrium_stage:
             total_epochs += epochs['equilibrium']
 
         current_stage = 'equilibrium'
 
-        if epochs['learning']>0:
+        if epochs['learning'] > 0:
             current_stage = 'learning'
 
         # Print benchmark based on mean reported in training data
         if Y_val is not None:
-            print("Benchmark metrics using historical mean in training data to make predictions in the validation set: ")
+            print(
+                "Benchmark metrics using historical mean in training data to make predictions in the validation set: ")
             with pd.option_context('display.float_format', '{:0.2g}'.format):
                 print('\n')
-                print(compute_benchmark_metrics(metrics={'mape': mape, 'mse': mse, 'r2': r2_score}, Y_ref=Y_train, Y=Y_val))
+                print(compute_benchmark_metrics(metrics={metric_name: evaluation_metric, 'mse': mse, 'r2': r2_score}, Y_ref=Y_train,
+                                                Y=Y_val))
 
         # Training loop
         while not convergence:
@@ -2427,7 +2433,6 @@ class NESUELOGIT(PESUELOGIT):
                                            ((current_stage == 'equilibrium') or (epoch == epochs['learning']))):
                 convergence = True
 
-
             if epoch == 0 and epochs['learning'] > 0:
                 print(f"Learning stage: {epochs['learning']} epochs")
 
@@ -2444,20 +2449,20 @@ class NESUELOGIT(PESUELOGIT):
 
                 if Y_train is not None:
                     print(f"train mse traveltime={float(train_losses[-1]['loss_traveltime']):0.2g}, "
-                          f"train mape traveltime={float(train_losses[-1]['mape_traveltime']):0.1f}",
+                          f"train {metric_name} traveltime={float(train_losses[-1][f'{metric_name}_traveltime']):0.1f}",
                           f"train mse flow={float(train_losses[-1]['loss_flow']):0.2g}, "
-                          f"train mape flow={float(train_losses[-1]['mape_flow']):0.1f}, ",
+                          f"train {metric_name} flow={float(train_losses[-1][f'{metric_name}_flow']):0.1f}, ",
                           end='', flush=True)
 
                 if Y_val is not None:
                     print(f"val mse={float(val_losses[-1]['loss_total']):0.2g}, "
                           f"val mse traveltime={float(val_losses[-1]['loss_traveltime']):0.2g}, "
-                          f"val mape traveltime={float(val_losses[-1]['mape_traveltime']):0.1f}",
+                          f"val {metric_name} traveltime={float(val_losses[-1][f'{metric_name}_traveltime']):0.1f}",
                           f"val mse flow={float(val_losses[-1]['loss_flow']):0.2g}, "
-                          f"val mape flow={float(val_losses[-1]['mape_flow']):0.1f}, ",
+                          f"val {metric_name} flow={float(val_losses[-1][f'{metric_name}_flow']):0.1f}, ",
                           end='', flush=True)
 
-                print(# f"train_loss bpr={float(train_loss['loss_bpr'].numpy()):0.2g}, "
+                print(  # f"train_loss bpr={float(train_loss['loss_bpr'].numpy()):0.2g}, "
                     # f"val_loss bpr={float(val_loss['loss_bpr'].numpy()):0.2g}, "
                     # f"theta = {np.round(np.unique(self.theta.numpy(),axis =0),3)}, "
                     f"theta = {np.round(np.mean(self.theta.numpy(), axis=0), 3)}, "
@@ -2476,7 +2481,7 @@ class NESUELOGIT(PESUELOGIT):
                     # poly_weights = np.array2string(self.performance_function.weights[0].numpy().flatten(),
                     #                                formatter={'float': lambda x: f'{x:.1e}'})
                     poly_weights = np.array2string(
-                        np.mean(self.performance_function.polynomial_layer.poly_weights.numpy(),axis = 0),
+                        np.mean(self.performance_function.polynomial_layer.poly_weights.numpy(), axis=0),
                         formatter={'float': lambda x: f'{x:.1e}'})
                     print(f"polynomial weights: {poly_weights}, ", end='', flush=True)
 
@@ -2484,8 +2489,8 @@ class NESUELOGIT(PESUELOGIT):
                     print(f"kappa = {np.round(np.mean(self.kappa.numpy(), axis=0), 3)}, ", end='', flush=True)
 
                 if train_losses[-1].get('loss_equilibrium', False):
-                    print( f"lambda eq={loss_weights['equilibrium']:0.2g}, "
-                           f"relative gap={relative_gaps[-1]:0.2g}, ", end='', flush=True)
+                    print(f"lambda eq={loss_weights['equilibrium']:0.2g}, "
+                          f"relative gap={relative_gaps[-1]:0.2g}, ", end='', flush=True)
 
                     print(f"train equilibrium loss={train_losses[-1]['loss_equilibrium']:0.2g}, ", end='', flush=True)
 
@@ -2499,7 +2504,6 @@ class NESUELOGIT(PESUELOGIT):
             if epochs['learning'] > 0 and not convergence and \
                     ((equilibrium_stage and (epoch == (epochs['learning'])) and epochs['learning'] != 0) or
                      (epochs['learning'] == 0 and epoch == 0)):
-
                 current_stage = 'equilibrium'
                 print(f"\nEquilibrium stage: {epochs['equilibrium']} epochs")
 
@@ -2542,13 +2546,14 @@ class NESUELOGIT(PESUELOGIT):
                         # loss_weights_equilibrium = loss_weights.copy() # This is like coordinate descent
                         iterations = 1
 
-
                     # for i in range(iterations):
                     trainable_variables = [j for j in self.trainable_variables if
                                            j.name.split(':')[0] == 'flows']
 
-                    assert len(trainable_variables) == 1
-
+                    if self.endogenous_flows:
+                        assert len(trainable_variables) == 1
+                    else:
+                        assert len(trainable_variables) == 0
                     # if alternating_optimization:
                     #
                     #     with tf.GradientTape() as tape:
@@ -2578,7 +2583,7 @@ class NESUELOGIT(PESUELOGIT):
                                                 epoch=epoch)
 
                 if Y_train is not None:
-                    train_loss = {**train_loss, **self.compute_loss_metric(metric=mape, prefix_metric='mape_')}
+                    train_loss = {**train_loss, **self.compute_loss_metric(metric=evaluation_metric, prefix_metric=prefix_metric)}
 
                 # train_loss = {**train_loss, **self.compute_loss_metric(metric=mape, prefix_metric='mape')}
 
@@ -2586,7 +2591,7 @@ class NESUELOGIT(PESUELOGIT):
 
                 if X_val is not None and Y_val is not None:
                     val_loss = self.loss_function(X=X_val, Y=Y_val, lambdas=loss_weights, loss_metric=mse, epoch=epoch)
-                    val_loss = {**val_loss, **self.compute_loss_metric(metric=mape, prefix_metric='mape_')}
+                    val_loss = {**val_loss, **self.compute_loss_metric(metric=evaluation_metric, prefix_metric=prefix_metric)}
 
                 train_losses.append(train_loss)
                 val_losses.append(val_loss)
@@ -2650,9 +2655,7 @@ class NESUELOGIT(PESUELOGIT):
         return train_results_df, val_results_df
 
 
-
-def create_inference_model(reference_model, creation_method,  **kwargs):
-
+def create_inference_model(reference_model, creation_method, **kwargs):
     reference_model.save_weights(reference_model._filepath_weights)
 
     if not kwargs.get('n_periods', False):
@@ -2678,6 +2681,7 @@ def create_inference_model(reference_model, creation_method,  **kwargs):
     new_model.load_weights(reference_model._filepath_weights)
 
     return new_model
+
 
 def train_val_split_by_links(Y: np.array, val_size=0) -> (np.ndarray, np.ndarray):
     """
@@ -2719,6 +2723,7 @@ def train_val_split_by_links(Y: np.array, val_size=0) -> (np.ndarray, np.ndarray
 
     return Y_train, Y_val
 
+
 def make_kfold(y: tf.Tensor, n_splits=2, random_state: int = None, shuffle=False):
     """
 
@@ -2758,8 +2763,13 @@ def train_kfold(model: NESUELOGIT,
                 Y: tf.Tensor,
                 n_splits: int,
                 random_state=None,
+                evaluation_metric=mape,
                 *args,
                 **kwargs):
+
+
+    metric_name = evaluation_metric.__name__
+
     traveltime_folds = make_kfold(y=Y[:, :, 0], n_splits=n_splits, random_state=random_state)
     flow_folds = make_kfold(y=Y[:, :, 1], n_splits=n_splits, random_state=random_state)
 
@@ -2796,11 +2806,12 @@ def train_kfold(model: NESUELOGIT,
         # Compute metrics_df before training
         model.load_weights(filepath)
         with block_output(show_stdout=False, show_stderr=False):
+            kwargs['evaluation_metric'] = evaluation_metric
             model.fit(X_train, Y_train, X_val, Y_val, *args,
                       **{**kwargs, **{'epochs': {'training': 0, 'equilibrium': 0}}})
 
         for X_cur, Y_cur, dataset_label in [(X_train, Y_train, 'training'), (X_val, Y_val, 'validation')]:
-            cur_metrics_df = model.compute_loss_metrics(metrics={'mape': mape, 'mse': mse, 'r2': r2_score},
+            cur_metrics_df = model.compute_loss_metrics(metrics={metric_name: evaluation_metric, 'mse': mse, 'r2': r2_score},
                                                         X=X_cur, Y=Y_cur).assign(dataset=dataset_label)
 
             metrics_df = pd.concat([metrics_df, cur_metrics_df.assign(fold=i, stage='initial')])
@@ -2810,7 +2821,6 @@ def train_kfold(model: NESUELOGIT,
 
         train_results_df, val_results_df = model.fit(X_train, Y_train, X_val, Y_val, *args, **kwargs)
         relative_gap = train_results_df['relative_gap'].values[-1]
-
 
         # Store parameters values
         for period in range(model.theta.shape[0]):
@@ -2833,22 +2843,22 @@ def train_kfold(model: NESUELOGIT,
                                                          'group': 'generation'})])
 
         for X_cur, Y_cur, dataset_label in [(X_train, Y_train, 'training'), (X_val, Y_val, 'validation')]:
-            cur_metrics_df = model.compute_loss_metrics(metrics={'mape': mape, 'mse': mse, 'r2': r2_score},
+            cur_metrics_df = model.compute_loss_metrics(metrics={metric_name: evaluation_metric, 'mse': mse, 'r2': r2_score},
                                                         X=X_cur, Y=Y_cur).assign(dataset=dataset_label)
 
             metrics_df = pd.concat([metrics_df, cur_metrics_df.assign(fold=i, stage='final')])
 
         # Add benchmark that is set as the average values of the observed measurements in the training set
         metrics_df = pd.concat([metrics_df,
-                                compute_benchmark_metrics(metrics={'mape': mape, 'mse': mse, 'r2': r2_score},
+                                compute_benchmark_metrics(metrics={metric_name: evaluation_metric, 'mse': mse, 'r2': r2_score},
                                                           Y_ref=Y_train, Y=Y_train).assign(dataset='training',
-                                                                                           fold = i,
-                                                                                           stage = 'historical mean')])
+                                                                                           fold=i,
+                                                                                           stage='historical mean')])
         metrics_df = pd.concat([metrics_df,
-                                compute_benchmark_metrics(metrics={'mape': mape, 'mse': mse, 'r2': r2_score},
+                                compute_benchmark_metrics(metrics={metric_name: evaluation_metric, 'mse': mse, 'r2': r2_score},
                                                           Y_ref=Y_train, Y=Y_val).assign(dataset='validation',
-                                                                                         fold = i,
-                                                                                         stage = 'historical mean')])
+                                                                                         fold=i,
+                                                                                         stage='historical mean')])
 
         metrics_df['relative_gap'] = relative_gap
 
@@ -2860,7 +2870,6 @@ def train_kfold(model: NESUELOGIT,
 
     metrics_df['n_splits'] = n_splits
     metrics_df['model'] = model._model_id
-
 
     parameters_df['n_splits'] = n_splits
     parameters_df['model'] = model._model_id
@@ -2875,8 +2884,7 @@ def train_kfold(model: NESUELOGIT,
     # print("%0.2f accuracy with a standard deviation of %0.2f" % (scores.mean(), scores.std()))
 
 
-def regularization_kfold(loss_weights: List[Dict], target_metric: str = None, target_component: str = None,  **kwargs):
-
+def regularization_kfold(loss_weights: List[Dict], target_metric: str = None, target_component: str = None, **kwargs):
     """
 
     :param target_metric:
@@ -2903,7 +2911,7 @@ def regularization_kfold(loss_weights: List[Dict], target_metric: str = None, ta
         kwargs['loss_weights'] = weights
         kwargs['model'].load_weights(filepath)
 
-        print(f"\nReplicate: {i+1}/{int(len(loss_weights))}\n")
+        print(f"\nReplicate: {i + 1}/{int(len(loss_weights))}\n")
         print(f"weights:  {weights}")
 
         metrics_kfold_df, parameters_kfold_df = train_kfold(**kwargs)
@@ -2913,10 +2921,10 @@ def regularization_kfold(loss_weights: List[Dict], target_metric: str = None, ta
         parameters_kfold_dfs.append(parameters_kfold_df)
 
         # Store mse of the loss components and the corresponding loss weights
-        metrics_df = metrics_kfold_df[(metrics_kfold_df.metric == 'mse') & (metrics_kfold_df.stage == 'final')].\
+        metrics_df = metrics_kfold_df[(metrics_kfold_df.metric == 'mse') & (metrics_kfold_df.stage == 'final')]. \
             groupby(['component', 'dataset'])[['value']].mean().reset_index()
 
-        for k,v in dict(zip(['lambda_' + i for i in weights.keys()], weights.values())).items():
+        for k, v in dict(zip(['lambda_' + i for i in weights.keys()], weights.values())).items():
             metrics_df[k] = v
 
         metrics_df['relative_gap'] = metrics_kfold_df['relative_gap']
@@ -2941,8 +2949,8 @@ def regularization_kfold(loss_weights: List[Dict], target_metric: str = None, ta
                 min_loss = avg_loss
                 min_idx = i
 
-            print(f'\nResults replicate: {i+1}, target metric: {target_metric}, '
-                  f'average {target_metric} {target_component}: {float(avg_loss):0.2g}, best replicate: {min_idx+1}')
+            print(f'\nResults replicate: {i + 1}, target metric: {target_metric}, '
+                  f'average {target_metric} {target_component}: {float(avg_loss):0.2g}, best replicate: {min_idx + 1}')
 
     # metrics_df = metrics_df.reset_index().drop('index', axis=1)
 
@@ -2968,7 +2976,7 @@ def compute_benchmark_metric(metric=mse,
     '''
 
     predicted_traveltime, predicted_flow \
-        = tf.unstack((np.nanmean(Y_ref.numpy().reshape(-1, Y_ref.shape[-1]), 0) * np.ones_like(Y)), axis =-1)
+        = tf.unstack((np.nanmean(Y_ref.numpy().reshape(-1, Y_ref.shape[-1]), 0) * np.ones_like(Y)), axis=-1)
 
     observed_traveltime, observed_flow = tf.unstack(Y, axis=-1)
 
@@ -2977,12 +2985,12 @@ def compute_benchmark_metric(metric=mse,
             # prefix_metric + 'equilibrium': float(metric(actual=input_flow, predicted=output_flow))
             }
 
-def compute_benchmark_metrics(metrics: Dict, Y_ref, Y):
 
+def compute_benchmark_metrics(metrics: Dict, Y_ref, Y):
     metrics_df = pd.DataFrame({})
 
     for name, metric in metrics.items():
-        metrics_components = compute_benchmark_metric(Y_ref = Y_ref, Y = Y, metric=metric, prefix_metric='')
+        metrics_components = compute_benchmark_metric(Y_ref=Y_ref, Y=Y, metric=metric, prefix_metric='')
         metrics_df = pd.concat([metrics_df,
                                 pd.DataFrame({'component': metrics_components.keys(),
                                               'value': metrics_components.values(),
@@ -2991,7 +2999,12 @@ def compute_benchmark_metrics(metrics: Dict, Y_ref, Y):
     return metrics_df
 
 
-def compute_baseline_predictions_kfold(X: tf.Tensor, y: tf.Tensor, coordinates, n_splits: int, seed: int):
+def compute_baseline_predictions_kfold(X: tf.Tensor,
+                                       y: tf.Tensor,
+                                       coordinates,
+                                       n_splits: int,
+                                       seed: int,
+                                       metric=mape):
     """
 
     :param X: inputs for regression, independent features (|S| * |A| x |D|)
@@ -3005,9 +3018,11 @@ def compute_baseline_predictions_kfold(X: tf.Tensor, y: tf.Tensor, coordinates, 
 
     """
 
+    metric_name = metric.__name__
+
     metrics_kfold = pd.DataFrame({})
 
-    folds = make_kfold(y= y, n_splits=n_splits, random_state=seed)
+    folds = make_kfold(y=y, n_splits=n_splits, random_state=seed)
 
     X = X.numpy()
 
@@ -3025,19 +3040,20 @@ def compute_baseline_predictions_kfold(X: tf.Tensor, y: tf.Tensor, coordinates, 
 
         with block_output(show_stdout=False, show_stderr=False):
             metrics_df, _ = compute_baseline_predictions(X_train=X[train_idxs, :],
-                                                      X_val=X[val_idxs, :],
-                                                      y_train=y_train[train_idxs],
-                                                      y_val=y_val[val_idxs],
-                                                      coordinates_train= coordinates[train_idxs, :],
-                                                      coordinates_val= coordinates[val_idxs, :],
-                                                      metric = mape
-                                                      )
+                                                         X_val=X[val_idxs, :],
+                                                         y_train=y_train[train_idxs],
+                                                         y_val=y_val[val_idxs],
+                                                         coordinates_train=coordinates[train_idxs, :],
+                                                         coordinates_val=coordinates[val_idxs, :],
+                                                         metric=metric
+                                                         )
 
-        metrics_df = metrics_df.assign(fold=i, metric='mape', n_splits=n_splits)
+        metrics_df = metrics_df.assign(fold=i, metric=metric_name, n_splits=n_splits)
 
         metrics_kfold = pd.concat([metrics_kfold, metrics_df])
 
     return metrics_kfold
+
 
 def compute_baseline_predictions(X_train: np.ndarray,
                                  X_val: np.ndarray,
@@ -3045,9 +3061,9 @@ def compute_baseline_predictions(X_train: np.ndarray,
                                  y_val: np.ndarray,
                                  coordinates_train: np.ndarray,
                                  coordinates_val: np.ndarray,
-                                 metric = mape,
-                                 models = None):
-        """
+                                 metric=mape,
+                                 models=None):
+    """
         Models include historical mean, regression, ordinary kriging and kriging regression
         :param X_train: matrix with features used to make predictions (|A| x |D|)
         :param y_train: vector of either travel time or counts (|A| x 1)
@@ -3057,153 +3073,153 @@ def compute_baseline_predictions(X_train: np.ndarray,
 
         where A is the set of links and D is the set of exogenous features
         """
-        _models = ['historical_mean', 'ordinary_kriging', 'regression_kriging', 'linear_regression']
+    _models = ['historical_mean', 'ordinary_kriging', 'regression_kriging', 'linear_regression']
 
-        if models is None:
-            models = _models
+    if models is None:
+        models = _models
 
-        # Get rid of values in validation set with nan observations
-        train_non_nan_idxs = ~np.isnan(y_train)
-        val_non_nan_idxs = ~np.isnan(y_val)
+    # Get rid of values in validation set with nan observations
+    train_non_nan_idxs = ~np.isnan(y_train)
+    val_non_nan_idxs = ~np.isnan(y_val)
 
-        p_train, x_train, target_train \
-            = X_train[train_non_nan_idxs], coordinates_train[train_non_nan_idxs], y_train[train_non_nan_idxs]
+    p_train, x_train, target_train \
+        = X_train[train_non_nan_idxs], coordinates_train[train_non_nan_idxs], y_train[train_non_nan_idxs]
 
-        p_val, x_val, target_val = X_val, coordinates_val, y_val
-        # p_val, x_val, target_val = \
-        #     X_val[val_non_nan_idxs], coordinates_val[val_non_nan_idxs], y_val[val_non_nan_idxs]
+    p_val, x_val, target_val = X_val, coordinates_val, y_val
+    # p_val, x_val, target_val = \
+    #     X_val[val_non_nan_idxs], coordinates_val[val_non_nan_idxs], y_val[val_non_nan_idxs]
 
-        metrics_dict = {}
-        predictions = {}
+    metrics_dict = {}
+    predictions = {}
 
-        # 1) Historical mean
-        if 'historical_mean' in models:
-            y_pred_historical_mean = np.nanmean(target_train)
-            predictions['historical_mean'] = y_pred_historical_mean * np.ones_like(target_val)
-            metrics_dict['historical_mean'] = float(metric(target_val, predictions['historical_mean']))
+    # 1) Historical mean
+    if 'historical_mean' in models:
+        y_pred_historical_mean = np.nanmean(target_train)
+        predictions['historical_mean'] = y_pred_historical_mean * np.ones_like(target_val)
+        metrics_dict['historical_mean'] = float(metric(target_val, predictions['historical_mean']))
 
-        # 2) Linear regression
-        if 'linear_regression' in models:
-            lr_model = LinearRegression(copy_X=True, fit_intercept=True)
+    # 2) Linear regression
+    if 'linear_regression' in models:
+        lr_model = LinearRegression(copy_X=True, fit_intercept=True)
 
-            lr_model.fit(x_train, target_train)
-            predictions['linear_regression'] = lr_model.predict(x_val)
+        lr_model.fit(x_train, target_train)
+        predictions['linear_regression'] = lr_model.predict(x_val)
 
-            metrics_dict['linear_regression'] = float(metric(actual = target_val,
-                                                             predicted = predictions['linear_regression']))
+        metrics_dict['linear_regression'] = float(metric(actual=target_val,
+                                                         predicted=predictions['linear_regression']))
 
-        # 3) Ordinary kriging
-        if 'ordinary_kriging' in models:
-            OK = OrdinaryKriging(
-                x_train[:, 0],
-                x_train[:, 1],
-                target_train.flatten(),
-                # variogram_model="gaussian",
-                # variogram_model= 'linear',
-                variogram_model='exponential', # In line with Selby and Kockelman 2013
-                verbose=False,
-                enable_plotting=False,
-                # nlags = 20
-            )
+    # 3) Ordinary kriging
+    if 'ordinary_kriging' in models:
+        OK = OrdinaryKriging(
+            x_train[:, 0],
+            x_train[:, 1],
+            target_train.flatten(),
+            # variogram_model="gaussian",
+            # variogram_model= 'linear',
+            variogram_model='exponential',  # In line with Selby and Kockelman 2013
+            verbose=False,
+            enable_plotting=False,
+            # nlags = 20
+        )
 
-            try:
-                predictions['ordinary_kriging'], ss = OK.execute("points", x_val[:, 0], x_val[:, 1])
-                metrics_dict['ordinary_kriging'] = float(metric(target_val.flatten(),
-                                                                 predictions['ordinary_kriging']))
-            except:
-                metrics_dict['ordinary_kriging'] = float('nan')
+        try:
+            predictions['ordinary_kriging'], ss = OK.execute("points", x_val[:, 0], x_val[:, 1])
+            metrics_dict['ordinary_kriging'] = float(metric(target_val.flatten(),
+                                                            predictions['ordinary_kriging']))
+        except:
+            metrics_dict['ordinary_kriging'] = float('nan')
 
-        # # 3) Universal kriging (too slow and perform similar than ordinary kriging)
-        # UK = UniversalKriging(
-        #     x_train[:, 0],
-        #     x_train[:, 1],
-        #     target_train.flatten(),
-        #     # variogram_model="linear",
-        #     variogram_model='exponential', # In line with Selby and Kockelman 2013
-        #     verbose=False,
-        #     drift_terms=["regional_linear"]
-        # )
-        #
-        # # TODO: Make predictions in test set
-        #
-        # pred_ukriging, ss = UK.execute("points", x_val[:, 0], x_val[:, 1])
-        #
-        # print('MAPE Universal kriging:', float(mape(target_val.flatten(), pred_ukriging)))
-        # # print('Median APE', median_absolute_percentage_error(target_val, pred_ukriging))
+    # # 3) Universal kriging (too slow and perform similar than ordinary kriging)
+    # UK = UniversalKriging(
+    #     x_train[:, 0],
+    #     x_train[:, 1],
+    #     target_train.flatten(),
+    #     # variogram_model="linear",
+    #     variogram_model='exponential', # In line with Selby and Kockelman 2013
+    #     verbose=False,
+    #     drift_terms=["regional_linear"]
+    # )
+    #
+    # # TODO: Make predictions in test set
+    #
+    # pred_ukriging, ss = UK.execute("points", x_val[:, 0], x_val[:, 1])
+    #
+    # print('MAPE Universal kriging:', float(mape(target_val.flatten(), pred_ukriging)))
+    # # print('Median APE', median_absolute_percentage_error(target_val, pred_ukriging))
 
-        # 4) Regression kriging
+    # 4) Regression kriging
 
-        if 'regression_kriging' in models:
-            # train_gdf.drop(['date'],axis = 1).to_file(f'{main_dir}/examples/scripts/output/fresno_network.shp',
-            #                                           driver='ESRI Shapefile')
-            lr_model = LinearRegression(copy_X=True, fit_intercept=True)
+    if 'regression_kriging' in models:
+        # train_gdf.drop(['date'],axis = 1).to_file(f'{main_dir}/examples/scripts/output/fresno_network.shp',
+        #                                           driver='ESRI Shapefile')
+        lr_model = LinearRegression(copy_X=True, fit_intercept=True)
 
-            m_rk = RegressionKriging(regression_model=lr_model, n_closest_points=10, variogram_model='linear')
-            # Exponential is very unstable
-            # m_rk = RegressionKriging(regression_model=lr_model, n_closest_points=10, variogram_model = 'exponential')
-            # m_rk = RegressionKriging(regression_model=lr_model)
+        m_rk = RegressionKriging(regression_model=lr_model, n_closest_points=10, variogram_model='linear')
+        # Exponential is very unstable
+        # m_rk = RegressionKriging(regression_model=lr_model, n_closest_points=10, variogram_model = 'exponential')
+        # m_rk = RegressionKriging(regression_model=lr_model)
 
-            # rk = RegressionKriging(regression_model='linear', variogram_model='spherical')
+        # rk = RegressionKriging(regression_model='linear', variogram_model='spherical')
 
-            # non_zero_idxs = np.where(target_train>0)[0]
-            # p_train, x_train, target_train = p_train[non_zero_idxs], x_train[non_zero_idxs], target_train[non_zero_idxs]
-            # p_val, x_val, target_val = p_val[non_zero_idxs], x_val[non_zero_idxs], target_val[non_zero_idxs]
+        # non_zero_idxs = np.where(target_train>0)[0]
+        # p_train, x_train, target_train = p_train[non_zero_idxs], x_train[non_zero_idxs], target_train[non_zero_idxs]
+        # p_val, x_val, target_val = p_val[non_zero_idxs], x_val[non_zero_idxs], target_val[non_zero_idxs]
 
-            with block_output(show_stdout=False, show_stderr=False):
-                m_rk.fit(p_train, x_train, target_train.flatten())
+        with block_output(show_stdout=False, show_stderr=False):
+            m_rk.fit(p_train, x_train, target_train.flatten())
 
-            predictions['regression_kriging'] = m_rk.predict(p_val, x_val)
+        predictions['regression_kriging'] = m_rk.predict(p_val, x_val)
 
-            metrics_dict['kriging_regression'] = float(metric(target_val.flatten(), predictions['regression_kriging']))
+        metrics_dict['kriging_regression'] = float(metric(target_val.flatten(), predictions['regression_kriging']))
 
-        return pd.DataFrame({'model':metrics_dict.keys(), 'value': metrics_dict.values(),
-                             'obs_validation': len(val_non_nan_idxs)}), predictions
+    return pd.DataFrame({'model': metrics_dict.keys(), 'value': metrics_dict.values(),
+                         'obs_validation': len(val_non_nan_idxs)}), predictions
 
-        # # Geographical Weighted Regression (not working well due to matrix inversion issues)
-        # # https://deepnote.com/@carlos-mendez/PYTHON-GWR-and-MGWR-71dd8ba9-a3ea-4d28-9b20-41cc8a282b7a
-        #
-        # # Some columns are dropped as the matrix becomes singular
-        # X_train_gwr = p_train[:,0:-5]
-        # X_val_gwr = p_val[:,0:-5]
-        # # X_train_gwr = np.array([])
-        # # X_val_gwr = np.array([])
-        #
-        # coords = list(zip(x_train[:, 0], x_train[:, 1]))
-        #
-        # gwr_selector = Sel_BW(coords, target_train, X_train_gwr, multi=True, constant=True)
-        #
-        # gwr_bw = gwr_selector.search(multi_bw_min=[2], multi_bw_max=[10])
-        #
-        # gwr_model = GWR(x_train, target_train, X_train_gwr, gwr_bw)
-        #
-        # gwr_results = gwr_model.fit()
-        #
-        # # gwr_results.summary()
-        #
-        # # train_df['gwr_R2'] = gwr_results.localR2
-        #
-        # gwr_predictions = gwr_model.predict(x_val, X_val_gwr, gwr_results.scale, gwr_results.resid_response).predictions
-        #
-        # print('MAPE Geographical Weighted Regression', float(mape(target_val, gwr_predictions)))
-        # # print('Median APE', median_absolute_percentage_error(target_val, gwr_predictions))
+    # # Geographical Weighted Regression (not working well due to matrix inversion issues)
+    # # https://deepnote.com/@carlos-mendez/PYTHON-GWR-and-MGWR-71dd8ba9-a3ea-4d28-9b20-41cc8a282b7a
+    #
+    # # Some columns are dropped as the matrix becomes singular
+    # X_train_gwr = p_train[:,0:-5]
+    # X_val_gwr = p_val[:,0:-5]
+    # # X_train_gwr = np.array([])
+    # # X_val_gwr = np.array([])
+    #
+    # coords = list(zip(x_train[:, 0], x_train[:, 1]))
+    #
+    # gwr_selector = Sel_BW(coords, target_train, X_train_gwr, multi=True, constant=True)
+    #
+    # gwr_bw = gwr_selector.search(multi_bw_min=[2], multi_bw_max=[10])
+    #
+    # gwr_model = GWR(x_train, target_train, X_train_gwr, gwr_bw)
+    #
+    # gwr_results = gwr_model.fit()
+    #
+    # # gwr_results.summary()
+    #
+    # # train_df['gwr_R2'] = gwr_results.localR2
+    #
+    # gwr_predictions = gwr_model.predict(x_val, X_val_gwr, gwr_results.scale, gwr_results.resid_response).predictions
+    #
+    # print('MAPE Geographical Weighted Regression', float(mape(target_val, gwr_predictions)))
+    # # print('Median APE', median_absolute_percentage_error(target_val, gwr_predictions))
 
-        # # Multi Geographical Weighted Regression (NOTE: prediction is not implemented)
-        # # https://deepnote.com/@carlos-mendez/PYTHON-GWR-and-MGWR-71dd8ba9-a3ea-4d28-9b20-41cc8a282b7a
-        #
-        # # Some columns are dropped as the matrix becomes singular
-        # X_train_mgwr = p_train[:, 0:-4]
-        # X_val_mgwr = p_val[:, 0:-4]
-        #
-        # coords = list(zip(x_train[:, 0], x_train[:, 1]))
-        #
-        # mgwr_selector = Sel_BW(coords, target_train[:, np.newaxis], X_train_mgwr, multi=True, constant=True)
-        #
-        # mgwr_bw = mgwr_selector.search(multi_bw_min=[2], multi_bw_max=[10])
-        #
-        # mgwr_model = MGWR(x_train, target_train[:, np.newaxis], X_train_gwr, mgwr_selector, constant=True)
-        #
-        # mgwr_results = mgwr_model.fit()
-        #
-        # # mgwr_results.summary()
-        #
-        # # train_df['gwr_R2'] = gwr_results.localR2
+    # # Multi Geographical Weighted Regression (NOTE: prediction is not implemented)
+    # # https://deepnote.com/@carlos-mendez/PYTHON-GWR-and-MGWR-71dd8ba9-a3ea-4d28-9b20-41cc8a282b7a
+    #
+    # # Some columns are dropped as the matrix becomes singular
+    # X_train_mgwr = p_train[:, 0:-4]
+    # X_val_mgwr = p_val[:, 0:-4]
+    #
+    # coords = list(zip(x_train[:, 0], x_train[:, 1]))
+    #
+    # mgwr_selector = Sel_BW(coords, target_train[:, np.newaxis], X_train_mgwr, multi=True, constant=True)
+    #
+    # mgwr_bw = mgwr_selector.search(multi_bw_min=[2], multi_bw_max=[10])
+    #
+    # mgwr_model = MGWR(x_train, target_train[:, np.newaxis], X_train_gwr, mgwr_selector, constant=True)
+    #
+    # mgwr_results = mgwr_model.fit()
+    #
+    # # mgwr_results.summary()
+    #
+    # # train_df['gwr_R2'] = gwr_results.localR2
