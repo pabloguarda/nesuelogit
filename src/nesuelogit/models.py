@@ -1766,8 +1766,8 @@ class NESUELOGIT(PESUELOGIT):
         :param o: vector with the total number of trips at each location
         :return: a sparse matrix of probabilities with dimensions |N| x |N|
 
-        Note: Currently fixed effects are assumed to be period specific, which makes attribute specific parameters to be
-        not identifiable
+        Note: Currently fixed effects are assumed to be period specific, which makes attribute specific parameters
+        to be not identifiable
         '''
 
         # Stack a set of sparse L matrix for every period
@@ -1815,13 +1815,11 @@ class NESUELOGIT(PESUELOGIT):
 
         # TODO: review choice of axis to sum on
         # g = tf.repeat(self.g, tf.sparse.reduce_sum(self.od.L_sparse, axis=1), axis=1)
-        g = tf.experimental.numpy.take(self.g, self.o, axis=1)
-
-        # tf.reduce_sum(np.array([[1, 2], [3, 4]]), axis=1)
+        god = tf.experimental.numpy.take(self.g, self.o, axis=1)
 
         # tf.sparse.to_dense(self.od.L_sparse)
 
-        q = g * self.phi
+        q = god * self.phi
 
         # tf.reduce_sum(g, axis = 1)
 
