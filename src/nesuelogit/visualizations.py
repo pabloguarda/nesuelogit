@@ -39,60 +39,64 @@ from typing import Union, Dict, List, Tuple
 from isuelogit.mytypes import Matrix
 
 
-def plot_metrics_kfold(df, metric_name = 'mape', benchmark_name = 'historical mean', sharex=True, sharey=True, **kwargs):
+def plot_metrics_kfold(df, metric_name = 'mape', benchmark_name = 'historical mean', model_name = 'model',
+                       sharex=True, sharey=True, **kwargs):
     # fig, axs = plt.subplots()
 
     sns.set_style("whitegrid")
 
-    fig, axs = plt.subplots(2, 2, tight_layout=True, figsize=(8, 7), sharex=sharex, sharey=sharey)
+    fig, axs = plt.subplots(2, 2, tight_layout=True, figsize=(9, 7), sharex=sharex, sharey=sharey)
 
     df = df.copy()
-    df.loc[df.stage == 'final', 'stage'] = 'model'
+    df.loc[df.stage == 'final', 'stage'] = model_name
 
     # fig, ax = plt.subplots()
     ax = axs[0, 0]
     sns.boxplot(data=df[(df.stage == 'initial') & (df.metric == metric_name)], x="component", y="value", hue='dataset',
-                ax=ax, **kwargs)
+                ax=ax, legend = False, **kwargs)
     # ax.set_title(metric_name + ' before model training')
     ax.set_title('start of model training')
     ax.set_ylabel(metric_name)
     ax.set_xlabel('loss component')
-    ax.legend(loc='upper right')
+    # ax.legend(loc='upper right')
 
     # fig, ax = plt.subplots()
     ax = axs[0, 1]
-    sns.boxplot(data=df[(df.stage == 'model') & (df.metric == metric_name)], x="component", y="value", hue='dataset',
-                ax=ax, **kwargs)
+    sns.boxplot(data=df[(df.stage == model_name) & (df.metric == metric_name)], x="component", y="value", hue='dataset',
+                ax=ax, legend = True, **kwargs)
     # ax.set_title(metric_name + ' after model training')
     ax.set_title('end of model training')
     ax.set_ylabel(metric_name)
     ax.set_xlabel('loss component')
-    ax.legend(loc='upper right')
+    legend = ax.legend(loc='upper right', title = 'stage', bbox_to_anchor=(1.5, 0.6))
+    # legend._legend_box.align = "left"
 
-    df = df[df['stage'].isin([benchmark_name, 'model'])]
-    df['stage'] = pd.Categorical(df['stage'], categories=[benchmark_name, 'model'])
+    df = df[df['stage'].isin([benchmark_name, model_name])]
+    df['stage'] = pd.Categorical(df['stage'], categories=[benchmark_name, model_name])
 
     ax = axs[1, 0]
     sns.boxplot(data=df[(df.dataset == 'training')
                         & (df.metric == metric_name) & (df.stage != 'initial')], x="component", y="value", hue='stage',
-                ax=ax, palette=list(sns.color_palette("deep"))[3:5], **kwargs)
+                ax=ax, legend = False, palette=list(sns.color_palette("deep"))[3:5], **kwargs)
     # ax.set_title(metric_name + ' in training set')
     ax.set_title('training set')
     ax.set_ylabel(metric_name)
     ax.set_xlabel('loss component')
-    ax.legend(title=None, loc='upper right')
+    # ax.legend(title=None, loc='upper right')
 
     # fig, axs = plt.subplots()
     ax = axs[1, 1]
     sns.boxplot(data=df[(df.dataset == 'validation')
                         & (df.metric == metric_name) & (df.stage != 'initial')], x="component", y="value", hue='stage',
-                ax=ax, palette=list(sns.color_palette("deep"))[3:5], **kwargs)
+                ax=ax, legend = True, palette=list(sns.color_palette("deep"))[3:5], **kwargs)
     # ax.axhline(df[(df.dataset == 'validation') & (df.metric == metric_name) & (df.stage == benchmark_name) ])
     # ax.set_title(metric_name + ' in validation set')
     ax.set_title('validation set')
     ax.set_ylabel(metric_name)
     ax.set_xlabel('loss component')
-    ax.legend(title=None, loc='upper right')
+    legend = ax.legend(loc='upper right', title='model', bbox_to_anchor=(1.6, 0.6))
+    # ax.legend(title=None, loc='upper right')
+    # legend._legend_box.align = "left"
 
     for ax in axs.reshape(-1):
         # ax.get_legend().remove()
@@ -118,7 +122,7 @@ def plot_baselines_kfold(df, metric_name='mape', sharex=True, sharey=True, **kwa
 
     sns.set_style("whitegrid")
 
-    fig, ax = plt.subplots(1, 1, tight_layout=True, figsize=(8, 7), sharex=sharex, sharey=sharey)
+    fig, ax = plt.subplots(1, 1, tight_layout=True, figsize=(10, 7), sharex=sharex, sharey=sharey)
 
     df = df.copy()
 
@@ -133,6 +137,8 @@ def plot_baselines_kfold(df, metric_name='mape', sharex=True, sharey=True, **kwa
     ax.get_yaxis().get_label().set_visible(True)
     ax.get_xaxis().get_label().set_visible(True)
     ax.xaxis.set_tick_params(which='both', labelbottom=True)
+
+    ax.legend(loc='upper right', bbox_to_anchor=(1.3, 0.6))
 
     sns.set_style("ticks")
 
@@ -1096,7 +1102,7 @@ def plot_congestion_maps(model, model_df: pd.DataFrame, gdf: gpd.GeoDataFrame, f
     ctx.add_basemap(source=ctx.providers.OpenStreetMap.Mapnik, ax=axs[0])
 
     plot_df[plot_df['obs_speed_ratio']>0].plot(column='obs_speed_ratio', scheme=scheme, cmap=cmap,  ax=axs[1],
-                 classification_kwds={'bins': breaks}, legend=True, legend_kwds = {"fmt": "{:.0f}%"})
+                 classification_kwds={'bins': breaks}, legend=show_legend, legend_kwds = {"fmt": "{:.0f}%"})
     axs[1].set_title('ground truth')
 
     plot_df[(plot_df['pred_speed_ratio']>0)].plot(column='pred_speed_ratio', scheme=scheme, cmap=cmap, ax=axs[2],
@@ -1105,7 +1111,7 @@ def plot_congestion_maps(model, model_df: pd.DataFrame, gdf: gpd.GeoDataFrame, f
 
     plot_df[(plot_df['pred_speed_ratio_kriging']>0)].plot(column='pred_speed_ratio_kriging',
                                                           scheme=scheme, cmap=cmap, ax=axs[3],
-                 classification_kwds={'bins': breaks}, legend=show_legend)
+                 classification_kwds={'bins': breaks}, legend=True, legend_kwds = {"fmt": "{:.0f}%"})
     axs[3].set_title('best benchmark')
 
     for ax in axs.flat:
@@ -1114,17 +1120,14 @@ def plot_congestion_maps(model, model_df: pd.DataFrame, gdf: gpd.GeoDataFrame, f
         ax.set_xticklabels([])
         ax.set_yticklabels([])
 
+
     legend = axs[3].get_legend()
     #Get rid of first interval with -infinity
     handles = legend.legendHandles[1:]
     labels = [text.get_text() for text in legend.texts[1:]]
     labels[0] = f"< {[x.strip() for x in labels[1].split(',')][0]}"
     labels[-1] = '> 100%'
-    # axs[1].legend(handles=handles, labels = labels, loc='lower right')
-    # axs[1].legend([])
-    axs[1].legend().set_visible(False)
-
-
+    axs[3].legend(handles=handles, labels = labels, loc='upper right', bbox_to_anchor=(2.35, 0.6))
 
     fig_speed.subplots_adjust(wspace=0, hspace=0)
     plt.suptitle('Speed ratio')
@@ -1153,7 +1156,7 @@ def plot_congestion_maps(model, model_df: pd.DataFrame, gdf: gpd.GeoDataFrame, f
     axs[2].set_title('our model')
 
     plot_df[(plot_df['pred_flow_ratio_kriging']>0)].plot(column='pred_flow_ratio_kriging', scheme=scheme, cmap=cmap, ax=axs[3],
-                 classification_kwds={'bins': breaks}, legend=show_legend, legend_kwds = {"fmt": "{:.0f}%"})
+                 classification_kwds={'bins': breaks}, legend=True, legend_kwds = {"fmt": "{:.0f}%"})
     axs[3].set_title('best benchmark')
 
     for ax in axs.flat:
@@ -1165,25 +1168,21 @@ def plot_congestion_maps(model, model_df: pd.DataFrame, gdf: gpd.GeoDataFrame, f
     # fig = plt.gcf()
     # fig.tight_layout(rect=[0, 0, 0.8, 1])
 
-    fig_flow.axes[0].get_legend_handles_labels()
+
+    legend = axs[3].get_legend()
+    # Get rid of first interval with -infinity
+    handles = legend.legendHandles[1:]
+    labels = [text.get_text() for text in legend.texts[1:]]
+    labels[0] = f"< {[x.strip() for x in labels[1].split(',')][0]}"
+    labels[-1] = '> 100%'
+    axs[3].legend(handles=handles, labels=labels, loc='upper right', bbox_to_anchor=(2.35, 0.6))
 
     fig_flow.subplots_adjust(wspace=0, hspace=0)
     # fig_flow.text(0.5, 0.95, 'Flow ratio', ha='center', fontsize=16)
     plt.suptitle('Flow ratio')
 
-    # axs[1].legend(handles=handles, labels=labels, loc='upper center', bbox_to_anchor=(1.2, -0.05))
-    # axs[1].legend([])
-    axs[1].legend().set_visible(False)
-    # plt.tight_layout(rect=[0, 0, 0.8, 1])
+
     plt.close()
 
-    legend, ax = plt.subplots()
-    # legend.patch.set_facecolor('none')
-    ax.axis('off')
-    ax.legend(handles=handles, labels=labels)
-    legend.subplots_adjust(0, 0, 1, 1)
-    legend.tight_layout(pad=0)
-    plt.close()
-
-    return fig_speed, fig_flow, legend
+    return fig_speed, fig_flow
 
