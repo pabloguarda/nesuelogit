@@ -94,7 +94,7 @@ def plot_metrics_kfold(df, metric_name = 'mape', benchmark_name = 'historical me
     ax.set_title('validation set')
     ax.set_ylabel(metric_name)
     ax.set_xlabel('loss component')
-    legend = ax.legend(loc='upper right', title='model', bbox_to_anchor=(1.6, 0.6))
+    legend = ax.legend(loc='upper right', title='model', bbox_to_anchor=(1.7, 0.6))
     # ax.legend(title=None, loc='upper right')
     # legend._legend_box.align = "left"
 
