@@ -538,7 +538,7 @@ class PolynomialLayer(tf.keras.layers.Layer):
         super().__init__(*args, **kwargs)
 
         self.poly_order = poly_order
-        self.poly = PolynomialFeatures(self.poly_order, include_bias=False)
+        # self.poly = PolynomialFeatures(self.poly_order, include_bias=False)
         self._built = False
         self.trainable_layer = trainable
         self._pretrain_weights = pretrain_weights
@@ -548,10 +548,25 @@ class PolynomialLayer(tf.keras.layers.Layer):
         self.kernel_constraint = kernel_constraint
         self.alpha_relu = alpha_relu
         self.link_specific = link_specific
+        self.n_periods = None
 
     @property
     def poly_weights(self):
         return tf.exp(self._poly_weights)
+
+    def fit_transform(self, x, degree = None):
+        if degree is None:
+            degree = self.poly_order
+
+        # Create a list to store polynomial features
+        poly_features = [x]
+
+        # Generate polynomial features up to the specified degree
+        for d in range(2, degree + 1):
+            poly_features.append(tf.pow(x, d))
+
+        # Concatenate the polynomial features along the columns
+        return tf.concat(poly_features, axis=1)
 
     def build(self, n_poly_features=None, n_links=None):
 
@@ -605,52 +620,42 @@ class PolynomialLayer(tf.keras.layers.Layer):
         # self.model.trainable = self.trainable_layer
 
     def map_flows(self, flows, capacities):
-
         """
         :param flows:
         :return:
         """
-
-        # self.poly = PolynomialFeatures(2)
-        # if self.poly_order > 1:
-
         flows /= capacities
-
-        flows = tf.cast(tf.concat([list(map(lambda x: self.poly.fit_transform(tf.transpose(x)),
+        # Sklearn operation is not differentiable in tensorflow
+        # flows = tf.cast(tf.concat([list(map(lambda x: tf.stop_gradient(self.poly.fit_transform(tf.transpose(x))),
+        #                                     tf.split(flows, flows.shape[0])))], axis=2), dtype=self.dtype)
+        flows = tf.cast(tf.concat([list(map(lambda x: self.fit_transform(tf.transpose(x)),
                                             tf.split(flows, flows.shape[0])))], axis=2), dtype=self.dtype)
+
 
         return flows
 
     def transform_flows(self, flows, capacities, period_ids, n_periods=None):
 
         flows = self.map_flows(flows=flows, capacities=capacities)
-        n_links = len(capacities)
 
         if not self._built:
             self.n_poly_features = flows.shape[-1]
             self.n_periods = flows.shape[0]
             self.build()
 
-        if n_periods is None:
-            n_periods = self.n_periods
-        #
-        # if self.link_specific:
-        #     return tf.reduce_sum(flows,2)
-
-        # flows = tf.reshape(self.model(flows), (n_periods, n_links))
         if self.link_specific:
             flows = tf.einsum("ijk,jk -> ij", flows, self.poly_weights)
         else:
             flows = tf.einsum("ijk,lk -> ij", flows, self.poly_weights)
 
-        if flows.shape[0] == n_periods:
+        if period_ids[:, 0].shape[0] != n_periods:
             return tf.cast(tf.experimental.numpy.take(flows, tf.cast(period_ids[:, 0], dtype=tf.int32), 0), self.dtype)
-        else:
-            return flows
+
+        return flows
+
 
     def pretrain_weights(self, flows, free_flow_traveltimes, capacities):
         """
-
         Weights are pretrained by mimicking a BPR with parameters alpha, beta
 
         :param flows:
@@ -1043,13 +1048,6 @@ class NESUELOGIT(PESUELOGIT):
         self.node_data_sorted = False
 
         self.o, self.d = np.array(self.od.ods).T
-
-    # def mask_by_train_val_split(self, tensor, Y):
-    #
-    #     tf.math.count_nonzero(
-    #
-    #
-    #     return tensor
 
     def update_predictions(self, X, period_dict=None, update_period_dict=False):
 
@@ -1492,8 +1490,9 @@ class NESUELOGIT(PESUELOGIT):
                 period_ids=self.period_ids,
                 n_periods=self.n_periods)
 
-        traveltimes = self.performance_function.call(flows)
+        #tf.reduce_sum(self._flows)
 
+        traveltimes = self.performance_function.call(flows)
         traveltimes = self.mask_predicted_traveltimes(tt=traveltimes,
                                                       k=np.array([link.bpr.k for link in self.network.links]),
                                                       max_factor=self.performance_function.max_traveltime_factor)
@@ -2265,9 +2264,9 @@ class NESUELOGIT(PESUELOGIT):
 
         if not self.built:
             self.endogenous_flows = True
-            if loss_weights['equilibrium'] == 0:
-                #In these cases, the input link flows are not identifiable, thus, they should be non-trainable.
-                self.endogenous_flows = False
+            # if loss_weights['equilibrium'] == 0:
+            #     #For the tvodlulpe model, the input link flows are not identifiable thus, they should be non-trainable.
+            #     self.endogenous_flows = False
             # with tf.compat.v1.variable_scope('model'):
             self.build()
 
@@ -3221,3 +3220,343 @@ def compute_baseline_predictions(X_train: np.ndarray,
     # # mgwr_results.summary()
     #
     # # train_df['gwr_R2'] = gwr_results.localR2
+
+
+
+def create_mlp_fresno(network, homogenous = False, diagonal = False, adjacency_constraint = True, poly_order = 4,
+                      alpha_prior = 0.15, beta_prior = 4, pretrain = False, dtype =tf.float32, link_specific = True):
+
+    return MLP(n_links=len(network.links),
+               free_flow_traveltimes=[link.bpr.tf for link in network.links],
+               capacities=[link.bpr.k for link in network.links],
+               kernel_constraint=KernelConstraint(
+                   link_keys=[(link.key[0], link.key[1]) for link in network.links],
+                   dtype=dtype,
+                   capacities=[link.bpr.k for link in network.links],
+                   adjacency_constraint=adjacency_constraint,
+                   free_flow_traveltimes=[link.bpr.tf for link in network.links],
+                   diagonal= diagonal,
+                   homogenous=homogenous,
+                   bounds_clipping = [0,10],
+                   min_diagonal_value = 1e-1
+               ),
+               trainable =True,
+               polynomial_layer= PolynomialLayer(poly_order=poly_order,
+                                                 trainable = True,
+                                                 pretrain_weights=pretrain,
+                                                 alpha_prior = alpha_prior, beta_prior=beta_prior,
+                                                 kernel_constraint=tf.keras.constraints.NonNeg(),
+                                                 link_specific = link_specific
+                                                 ),
+               alpha_relu = 0,
+               depth=1,
+               max_traveltime_factor = None,
+               dtype=dtype)
+
+def create_mlp_tntp(network, homogenous = True, diagonal = False, adjacency_constraint = True,
+                    poly_order = 3, link_specific = False, symmetric = False,
+                    alpha_prior = 0.15, beta_prior = 4, pretrain = False, dtype =tf.float32,
+                    max_traveltime_factor = None):
+
+    return MLP(n_links=len(network.links),
+               free_flow_traveltimes=[link.bpr.tf for link in network.links],
+               capacities=[link.bpr.k for link in network.links],
+               max_traveltime_factor = max_traveltime_factor,
+               kernel_constraint=KernelConstraint(
+                   link_keys=[(link.key[0], link.key[1]) for link in network.links],
+                   dtype=dtype,
+                   capacities=[link.bpr.k for link in network.links],
+                   free_flow_traveltimes=[link.bpr.tf for link in network.links],
+                   adjacency_constraint=adjacency_constraint,
+                   # initial_values = np.eye(network.get_n_links())
+                   diagonal= diagonal,
+                   homogenous=homogenous,
+                   symmetric = symmetric,
+                   bounds_clipping = [0,10],
+                   # min_diagonal_value = 1e-1
+               ),
+               trainable = True,
+               polynomial_layer= PolynomialLayer(poly_order=poly_order,
+                                                 trainable = True,
+                                                 pretrain_weights= pretrain,
+                                                 alpha_prior = alpha_prior, beta_prior=beta_prior,
+                                                 kernel_constraint=tf.keras.constraints.NonNeg(),
+                                                 link_specific = link_specific
+                                                 ),
+               alpha_relu = 0.1,
+               depth=1,
+               dtype=dtype)
+
+def create_model_tntp(network, model_key = '', dtype=tf.float32, n_periods=1, features_Z=None,
+                      historic_g=None, true_q = None,
+                      performance_function=None, utility_parameters = None, od_parameters = None,
+                      generation_parameters = None, generation: bool = True, utility: bool = False,
+                      ):
+
+    if utility_parameters is None:
+        utility_parameters = UtilityParameters(features_Y=['tt'],
+                                               features_Z=features_Z,
+                                               # initial_values={'tt': 0, 'tt_sd': 0, 's': 0, 'psc_factor': 0,
+                                               #                 'fixed_effect': np.zeros_like(network.links)},
+                                               initial_values={'tt': -1, 'tt_sd': -1.3, 's': -3, 'psc_factor': 0,
+                                                               'fixed_effect': np.zeros_like(network.links)},
+                                               true_values={'tt': -1, 'tt_sd': -1.3, 's': -3},
+                                               # trainables={'psc_factor': False, 'fixed_effect': False
+                                               #     , 'tt': True, 'tt_sd': True, 's': True},
+                                               trainables={'tt': utility, 'tt_sd': False, 's': False,
+                                                           'psc_factor': False, 'fixed_effect': True},
+                                               time_varying=True,
+                                               dtype=dtype
+                                               )
+
+    # utility_parameters.random_initializer((-1,1),['tt','tt_sd','s'])
+    # utility_parameters.random_initializer((0, 0), ['tt', 'tt_sd', 's'])
+
+    if performance_function is None:
+        # performance_function = create_bpr(network = network, dtype = dtype)
+        performance_function = create_mlp_tntp(network = network, dtype = dtype)
+
+    # generation_parameters = None
+
+    if generation_parameters is None and generation:
+        generation_parameters = GenerationParameters(
+            # features_Z=['income', 'population'],
+            initial_values={
+                # 'income': 0,
+                'fixed_effect': historic_g,
+            },
+            keys=['fixed_effect_od', 'fixed_effect_origin', 'fixed_effect_destination'],
+            # true_values={'income': 0, 'fixed_effect': np.zeros_like(network.links)},
+            # signs = {'income': '+','population': '+'},
+            trainables={
+                'fixed_effect': generation,
+                # 'income': False, 'population': False,
+                'fixed_effect_origin': False, 'fixed_effect_destination': False, 'fixed_effect_od': True
+                # 'fixed_effect_origin': False, 'fixed_effect_destination': True, 'fixed_effect_od': False
+            },
+            pretrain_generation_weights=False,
+            historic_g= historic_g,
+            dtype=dtype
+        )
+
+    if od_parameters is None:
+        od_parameters = ODParameters(key='od',
+                                     # initial_values=network.q.flatten(),
+                                     # true_values=network.q.flatten(),
+                                     initial_values = tf.stack(true_q),
+                                     historic_values = tf.stack(true_q),
+                                     # historic_values={0: network.q.flatten()},
+                                     # total_trips={0: np.sum(network.Q)},
+                                     ods=network.ods,
+                                     n_nodes = len(network.nodes),
+                                     n_periods=n_periods,
+                                     time_varying=True,
+                                     trainable= not generation)
+
+    model = NESUELOGIT(
+        key=model_key,
+        network=network,
+        dtype=dtype,
+        utility=utility_parameters,
+        performance_function=performance_function,
+        generation=generation_parameters,
+        od=od_parameters,
+        n_periods=n_periods
+    )
+
+    return model, {'utility_parameters': utility_parameters, 'generation_parameters': generation_parameters,
+                   'od_parameters': od_parameters, 'performance_function': performance_function}
+
+def create_bpr(network, alpha_prior = 1, beta_prior = 1, dtype =tf.float32, max_traveltime_factor = None):
+    return BPR(keys=['alpha', 'beta'],
+               initial_values={'alpha': alpha_prior * tf.ones(len(network.links), dtype = dtype),
+                               'beta': beta_prior * tf.ones(len(network.links), dtype = dtype)},
+               true_values={'alpha': 0.15, 'beta': 4},
+               trainables={'alpha': True, 'beta':True},
+               capacities = [link.bpr.k for link in network.links],
+               free_flow_traveltimes =[link.bpr.tf for link in network.links],
+               dtype = dtype,
+               max_traveltime_factor = max_traveltime_factor,
+               )
+
+
+def create_model_fresno(network, model_key = 'tvgodlulpe', dtype=tf.float32, n_periods=1, features_Z=None,
+                        historic_g=None, historic_q = None, performance_function=None, utility_parameters = None,
+                        od_parameters = None, generation_parameters = None, generation = True, od_trainable = False,
+                        utility_trainable = True, pretrain_generation_weights = True, generation_trainable = True):
+
+    if utility_parameters is None:
+        utility_parameters = UtilityParameters(
+            features_Y=['tt'], features_Z=features_Z,
+            initial_values={
+                'tt': -3.0597,
+                'tt_sd': -3.2678, 'median_inc': 0,
+                'incidents': -4.5368, 'bus_stops': 0, 'intersections': -3.8788,
+                'psc_factor': 0,
+                'fixed_effect': np.zeros_like(network.links)},
+            signs={'tt': '-', 'tt_sd': '-', 'median_inc': '+', 'incidents': '-',
+                   'bus_stops': '-', 'intersections': '-'},
+            trainables={'psc_factor': False, 'fixed_effect': utility_trainable,
+                        'tt': utility_trainable, 'tt_sd': utility_trainable, 'intersections': utility_trainable,
+                        'median_inc': utility_trainable, 'incidents': utility_trainable, 'bus_stops': utility_trainable
+                        },
+            time_varying=True,
+            dtype=dtype
+        )
+
+    if performance_function is None:
+        # performance_function = create_bpr(network = network, dtype = dtype)
+        performance_function = create_mlp_fresno(network = network, dtype = dtype)
+
+    if generation_parameters is None and generation:
+        generation_parameters = GenerationParameters(
+            features_Z=['population', 'income', 'bus_stops'],
+            keys=['fixed_effect_od', 'fixed_effect_origin', 'fixed_effect_destination'],
+            initial_values={'income': 0, 'population': 0, 'bus_stops': 0,
+                            # 'fixed_effect': historic_g[0]
+                            'fixed_effect': historic_g
+                            },
+            signs={'income': '+', 'population': '+', 'bus_stops': '-'},
+            trainables={'fixed_effect': generation_trainable,
+                        'income': False, 'population': False, 'bus_stops': False,
+                        # 'income': True, 'population': True, 'bus_stops': True,
+                        'fixed_effect_origin': False, 'fixed_effect_destination': False,
+                        'fixed_effect_od': generation_trainable
+                        },
+            time_varying=True,
+            historic_g= historic_g,
+            pretrain_generation_weights=pretrain_generation_weights,
+            dtype=dtype
+        )
+
+    if od_parameters is None:
+        od_parameters = ODParameters(key='od',
+                                     initial_values= historic_q,
+                                     historic_values={10: network.q.flatten()},
+                                     ods=network.ods,
+                                     n_nodes = len(network.nodes),
+                                     n_periods=n_periods,
+                                     time_varying=True,
+                                     trainable= od_trainable
+                                     )
+
+    model = NESUELOGIT(
+        key=model_key,
+        network=network,
+        dtype=dtype,
+        utility=utility_parameters,
+        performance_function=performance_function,
+        od=od_parameters,
+        generation=generation_parameters,
+        n_periods=n_periods
+    )
+
+    return model, {'utility_parameters': utility_parameters, 'generation_parameters': generation_parameters,
+                   'od_parameters': od_parameters, 'performance_function': performance_function}
+
+def create_tvgodlulpe_model_tntp(network, n_periods, historic_g, historic_q, features_Z, dtype = tf.float32):
+    return create_model_tntp(
+        model_key = 'tvgodlulpe',
+        n_periods= n_periods, network = network,
+        historic_g= historic_g,
+        utility_parameters = UtilityParameters(features_Y=['tt'],
+                                               features_Z=features_Z,
+                                               initial_values={
+                                                   'tt': -1e-0, 'tt_sd': -1e-0, 's': -1e-0, 'psc_factor': 0,
+                                                   # 'tt': -1e-1, 'tt_sd': -1e-1, 's': -1e-1, 'psc_factor': 0,
+                                                   'fixed_effect': np.zeros_like(network.links)},
+                                               true_values={'tt': -1, 'tt_sd': -1.3, 's': -3},
+                                               # signs={'tt': '-', 'tt_sd': '-', 's': '-'},
+                                               time_varying=True,
+                                               dtype=dtype,
+                                               trainables={'tt': True, 'tt_sd': True, 's': True,
+                                                           'psc_factor': False, 'fixed_effect': True},
+                                               ),
+        # For fair comparison against bpr, the interaction parameter is assumed homogenous
+        performance_function = create_mlp_tntp(network = network, adjacency_constraint = True,
+                                               symmetric = False, diagonal = True, homogenous = False,
+                                               poly_order = 3,
+                                               # alpha_prior = 1, beta_prior = 1,
+                                               pretrain = False,
+                                               dtype = dtype, max_traveltime_factor=None),
+        od_parameters = ODParameters(key='od',
+                                     #initial_values= generation_factors.values[:,np.newaxis]*network.q.flatten(),
+                                     initial_values = tf.stack(historic_q),
+                                     historic_values={0: historic_q[0], 1:historic_q[1]},
+                                     ods=network.ods,
+                                     n_nodes = len(network.nodes),
+                                     n_periods=n_periods,
+                                     time_varying=True,
+                                     trainable=True),
+        generation = True,
+        utility  = True,
+
+    )
+
+def create_tvodlulpe_model_tntp(network, n_periods, historic_g, historic_q, features_Z, dtype = tf.float32):
+
+    return create_model_tntp(
+        model_key='tvodlulpe',
+        n_periods=n_periods, network=network,
+        historic_g=historic_g,
+        performance_function=create_bpr(network=network, dtype=dtype, max_traveltime_factor=None),
+        utility_parameters=UtilityParameters(features_Y=['tt'],
+                                             features_Z=features_Z,
+                                             # initial_values={'tt': 0, 'tt_sd': 0, 's': 0, 'psc_factor': 0,
+                                             #                 'fixed_effect': np.zeros_like(network.links)},
+                                             initial_values={
+                                                 # 'tt': -1e-1, 'tt_sd': -1e-1, 's': -1e-1, 'psc_factor': 0,
+                                                 'tt': -1, 'tt_sd': -1, 's': -1, 'psc_factor': 0,
+                                                 'fixed_effect': np.zeros_like(network.links)},
+                                             # signs={'tt': '-', 'tt_sd': '-', 's': '-'},
+                                             true_values={'tt': -1, 'tt_sd': -1.3, 's': -3},
+                                             time_varying=True,
+                                             dtype=dtype,
+                                             trainables={'tt': True, 'tt_sd': True, 's': True,
+                                                         'psc_factor': False, 'fixed_effect': True},
+                                             ),
+        od_parameters=ODParameters(key='od',
+                                   # initial_values= generation_factors.values[:,np.newaxis]*network.q.flatten(),
+                                   initial_values=tf.stack(historic_q),
+                                   historic_values={0: historic_q[0], 1: historic_q[1]},
+                                   ods=network.ods,
+                                   n_periods=n_periods,
+                                   n_nodes=len(network.nodes),
+                                   time_varying=True,
+                                   trainable=True),
+        generation=False,
+        utility=True,
+    )
+
+def create_tvodlulpe_model_fresno(network, n_periods, historic_q, features_Z, dtype = tf.float32):
+    return create_model_fresno(
+        model_key = 'tvodlulpe',
+        n_periods= n_periods, network = network,
+        performance_function = create_bpr(network = network, dtype = dtype, alpha_prior = 0.9327, beta_prior = 4.1017),
+        od_parameters = ODParameters(key='od',
+                                     #initial_values= generation_factors.values[:,np.newaxis]*tntp_network.q.flatten(),
+                                     initial_values = tf.stack(historic_q),
+                                     historic_values={10: historic_q[0].flatten()},
+                                     ods=network.ods,
+                                     n_nodes = len(network.nodes),
+                                     n_periods=n_periods,
+                                     time_varying=True,
+                                     trainable=True),
+        generation = False,
+        utility_trainable = True,
+        features_Z = features_Z
+    )[0]
+
+def create_tvgodlulpe_model_fresno(network, n_periods, historic_q, features_Z):
+    return create_model_fresno(
+        model_key='tvgodlulpe',
+        n_periods = n_periods,
+        network = network,
+        performance_function = create_mlp_fresno(network = network,poly_order = 4, pretrain = False,
+                                                 link_specific = False, diagonal = False, homogenous = False),
+        historic_g= historic_q,
+        generation = True,
+        generation_trainable = True,
+        utility_trainable = True,
+        features_Z=features_Z
+    )[0]
