@@ -1538,17 +1538,17 @@ class NESUELOGIT(PESUELOGIT):
         When the model is not training (training = False), prediction should be made with the output link flow,
         regardless of the model
         '''
-        if self.key == 'tvodlulpe' and training:
-            return self.traveltimes()
+        # if self.key == 'tvodlulpe' and training:
+        #     return self.traveltimes()
         return self.output_traveltime(flows)
 
     def predict_flow(self, X=None, training = False):
         '''
-        When the model is not training (training = False), predition should be made with the output link flow,
+        When the model is not training (training = False), prediction should be made with the output link flow,
         regardless of the model
         '''
-        if self.key == 'tvodlulpe' and training:
-            return self.input_flow
+        # if self.key == 'tvodlulpe' and training:
+        #     return self.input_flow
         return self.output_flow(X)
 
     def class_membership_probabilities(self):
@@ -1620,7 +1620,7 @@ class NESUELOGIT(PESUELOGIT):
 
     @property
     def fixed_effect_generation(self):
-        # TODO: May mask this vector of parameters by only allowing nodes that report generated trips to be different than 0.
+        # TODO: May mask vector of parameters by only allowing nodes that report generated trips to differ from 0.
         # May also mask node_data
         return self._fixed_effect_generation
 
@@ -1767,7 +1767,7 @@ class NESUELOGIT(PESUELOGIT):
         return utility
 
     @property
-    def phi(self):
+    def phi(self, normalization = True):
         '''
         Trip distribution: Apply logit model to obtain probability of choosing a destination from any given location.
         :param o: vector with the total number of trips at each location
@@ -1792,15 +1792,14 @@ class NESUELOGIT(PESUELOGIT):
                                    values=tf.reshape(v, [-1]),
                                    dense_shape=(self.n_periods, self.od.n_nodes, self.od.n_nodes)
                                    )
+        if normalization:
+            normalized_values = V.values - tf.stop_gradient(
+                tf.reshape(tf.repeat(tf.sparse.reduce_max(V, axis=2), tf.sparse.reduce_sum(self.od.L_sparse, axis=1),
+                                     axis=1), [-1]))
 
-        normalized_values = V.values - tf.stop_gradient(tf.reshape(
-            tf.repeat(tf.sparse.reduce_max(V, axis=2), tf.sparse.reduce_sum(self.od.L_sparse, axis=1), axis=1), [-1]))
-
-        # normalized_values = V.values
-
-        V = tf.sparse.SparseTensor(indices=indices,
-                                   values=tf.exp(normalized_values),
-                                   dense_shape=(self.n_periods, self.od.n_nodes, self.od.n_nodes))
+            V = tf.sparse.SparseTensor(indices=indices,
+                                       values=tf.exp(normalized_values),
+                                       dense_shape=(self.n_periods, self.od.n_nodes, self.od.n_nodes))
 
         phi = tf.reshape(V.values, v.shape) / \
               tf.repeat(tf.sparse.reduce_sum(V, axis=2), tf.sparse.reduce_sum(self.od.L_sparse, axis=1), axis=1)
@@ -2241,7 +2240,7 @@ class NESUELOGIT(PESUELOGIT):
             loss_metric=None,
             evaluation_metric = mape,
             momentum_equilibrium=1,
-            pretrain_link_flows=False,
+            pretrain_link_flows=True,
             equilibrium_stage=False,
             alternating_optimization=False,
             relative_losses=True,
