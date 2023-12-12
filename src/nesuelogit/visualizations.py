@@ -856,7 +856,7 @@ def plot_rr_by_period_models(models, period_keys, period_feature='hour', **kwarg
 
     rr_by_hour_models = pd.concat(rr_by_hour_models)
 
-    rr_by_hour_models = rr_by_hour_models.sort_values([period_feature], ascending=True)
+    rr_by_hour_models = rr_by_hour_models.sort_values([period_feature], ascending=True).reset_index().drop(columns = {'index'})
 
     # rr_by_hour_models['model'] = pd.Categorical(rr_by_hour_models['model'], ['lue', 'odlue', 'odlulpe', 'tvodlulpe'])
 
