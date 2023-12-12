@@ -3474,7 +3474,7 @@ def create_tvgodlulpe_model_tntp(network, n_periods, historic_g, historic_q, fea
                                                ),
         # For fair comparison against bpr, the interaction parameter is assumed homogenous
         performance_function = create_mlp_tntp(network = network, adjacency_constraint = True,
-                                               symmetric = False, diagonal = True, homogenous = False,
+                                               symmetric = False, diagonal = False, homogenous = False,
                                                poly_order = 3,
                                                # alpha_prior = 1, beta_prior = 1,
                                                pretrain = False,
@@ -3491,7 +3491,7 @@ def create_tvgodlulpe_model_tntp(network, n_periods, historic_g, historic_q, fea
         generation = True,
         utility  = True,
 
-    )
+    )[0]
 
 def create_tvodlulpe_model_tntp(network, n_periods, historic_g, historic_q, features_Z, dtype = tf.float32):
 
@@ -3526,7 +3526,7 @@ def create_tvodlulpe_model_tntp(network, n_periods, historic_g, historic_q, feat
                                    trainable=True),
         generation=False,
         utility=True,
-    )
+    )[0]
 
 def create_tvodlulpe_model_fresno(network, n_periods, historic_q, features_Z, dtype = tf.float32):
     return create_model_fresno(
@@ -3547,14 +3547,15 @@ def create_tvodlulpe_model_fresno(network, n_periods, historic_q, features_Z, dt
         features_Z = features_Z
     )[0]
 
-def create_tvgodlulpe_model_fresno(network, n_periods, historic_q, features_Z):
+def create_tvgodlulpe_model_fresno(network, n_periods, historic_q, historic_g, features_Z):
     return create_model_fresno(
         model_key='tvgodlulpe',
         n_periods = n_periods,
         network = network,
         performance_function = create_mlp_fresno(network = network,poly_order = 4, pretrain = False,
                                                  link_specific = False, diagonal = False, homogenous = False),
-        historic_g= historic_q,
+        historic_g= historic_g,
+        historic_q = historic_q,
         generation = True,
         generation_trainable = True,
         utility_trainable = True,
