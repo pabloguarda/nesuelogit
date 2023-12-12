@@ -1055,8 +1055,8 @@ class NESUELOGIT(PESUELOGIT):
         self.period_ids = X[:, :, -1]
 
         self._output_flow = self.output_flow(X)
-        self._predicted_flow = self.predict_flow()
-        self._predicted_traveltime = self.predict_traveltime()
+        self._predicted_flow = self.predict_flow(training = False)
+        self._predicted_traveltime = self.predict_traveltime(training = False)
 
     def compute_loss_metric(self,
                             metric=mse,
@@ -1081,8 +1081,8 @@ class NESUELOGIT(PESUELOGIT):
         observed_traveltime = self._observed_traveltime
         observed_flow = self._observed_flow
 
-        predicted_flow = self.predict_flow()
-        predicted_traveltime = self.predict_traveltime()
+        predicted_flow = self.predict_flow(training = False)
+        predicted_traveltime = self.predict_traveltime(training = False)
         output_flow = self.output_flow()
         input_flow = self.input_flow
 
@@ -1129,11 +1129,11 @@ class NESUELOGIT(PESUELOGIT):
         self._output_flow = self.output_flow(X)
 
         # self._predicted_flow = self.input_flow  # tf.stop_gradient(self.predict_flow())
-        self._predicted_flow = self.predict_flow()
+        self._predicted_flow = self.predict_flow(training = True)
         # predicted_flow = output_flow
 
         # predicted_traveltimes = tf.stop_gradient(self.traveltimes())
-        self._predicted_traveltime = self.predict_traveltime()
+        self._predicted_traveltime = self.predict_traveltime(training = True)
 
     def equilibrium_loss(self, input_flow, output_flow, observed_flow, Y, loss_metric=mse):
 
@@ -1533,13 +1533,21 @@ class NESUELOGIT(PESUELOGIT):
     def predicted_flow(self):
         return self._predicted_flow
 
-    def predict_traveltime(self, flows=None):
-        if self.key == 'tvodlulpe':
+    def predict_traveltime(self, flows=None, training = False):
+        '''
+        When the model is not training (training = False), prediction should be made with the output link flow,
+        regardless of the model
+        '''
+        if self.key == 'tvodlulpe' and training:
             return self.traveltimes()
         return self.output_traveltime(flows)
 
-    def predict_flow(self, X=None):
-        if self.key == 'tvodlulpe':
+    def predict_flow(self, X=None, training = False):
+        '''
+        When the model is not training (training = False), predition should be made with the output link flow,
+        regardless of the model
+        '''
+        if self.key == 'tvodlulpe' and training:
             return self.input_flow
         return self.output_flow(X)
 
@@ -2109,9 +2117,9 @@ class NESUELOGIT(PESUELOGIT):
 
         self.update_predictions(X, period_dict)
 
-        predicted_flow = self.predict_flow()
+        predicted_flow = self.predict_flow(training = False)
 
-        predicted_traveltime = self.predict_traveltime() #self.traveltimes()
+        predicted_traveltime = self.predict_traveltime(training = False) #self.traveltimes()
 
         return tf.cast(tf.concat([predicted_traveltime[:, :, np.newaxis], predicted_flow[:, :, np.newaxis]], axis=2),
                        dtype)
