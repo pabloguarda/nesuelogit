@@ -5,6 +5,7 @@ input/private
 /output/tables/*
 /output/models/*
 /output/models/kfold/*
+/output/notebooks/*
 /output/experiments/*
 /output/figures/experiments/*
 /output/figures/results/*
@@ -13,6 +14,8 @@ input/private
 !output/models/kfold/.gitkeep
 !output/models/.gitkeep
 !output/figures/.gitkeep
+!output/notebooks/.gitkeep
+!/examples/scripts/.gitkeep
 
 !output/experiments/
 !output/experiments/.gitkeep
@@ -34,13 +37,10 @@ input/private
 /examples/notebooks/backup/
 /examples/notebooks/output/
 /examples/scripts/*
-/examples/scripts/experiments-siouxfalls.py
-#!/examples/scripts/simulate-nesuelogit-data.py
-examples/scripts/estimation-fresno.py
+!/examples/scripts/simulate-nesuelogit-data.py
 
 examples/notebooks/isttt/*
 
-ex
 
 ### Python template
 
@@ -187,5 +187,7 @@ cython_debug/
 
 # Pycharm
 .idea/
+
+
 
 
