@@ -538,7 +538,7 @@ class PolynomialLayer(tf.keras.layers.Layer):
         super().__init__(*args, **kwargs)
 
         self.poly_order = poly_order
-        # self.poly = PolynomialFeatures(self.poly_order, include_bias=False)
+        self.poly = PolynomialFeatures(self.poly_order, include_bias=False)
         self._built = False
         self.trainable_layer = trainable
         self._pretrain_weights = pretrain_weights
@@ -625,12 +625,10 @@ class PolynomialLayer(tf.keras.layers.Layer):
         :return:
         """
         flows /= capacities
-        # Sklearn operation is not differentiable in tensorflow
         # flows = tf.cast(tf.concat([list(map(lambda x: tf.stop_gradient(self.poly.fit_transform(tf.transpose(x))),
         #                                     tf.split(flows, flows.shape[0])))], axis=2), dtype=self.dtype)
         flows = tf.cast(tf.concat([list(map(lambda x: self.fit_transform(tf.transpose(x)),
                                             tf.split(flows, flows.shape[0])))], axis=2), dtype=self.dtype)
-
 
         return flows
 
@@ -648,10 +646,10 @@ class PolynomialLayer(tf.keras.layers.Layer):
         else:
             flows = tf.einsum("ijk,lk -> ij", flows, self.poly_weights)
 
-        if period_ids[:, 0].shape[0] != n_periods:
+        if period_ids.shape != flows.shape:
             return tf.cast(tf.experimental.numpy.take(flows, tf.cast(period_ids[:, 0], dtype=tf.int32), 0), self.dtype)
 
-        return flows
+        return tf.cast(flows, self.dtype)
 
 
     def pretrain_weights(self, flows, free_flow_traveltimes, capacities):
@@ -868,6 +866,8 @@ class MLP(PerformanceFunction):
         #     self.model.add(tf.keras.layers.ReLU())
         #     # tf.keras.layers.LeakyReLU(0.1)
         #     # tf.keras.layers.PReLU()\
+
+        # self.model.trainable = self.trainable_layer
         self.model.trainable = self.trainable_layer
 
         # Build parameters polynomial layer if it has been provided
@@ -905,7 +905,7 @@ class MLP(PerformanceFunction):
         #                         clip_value_min=self.free_flow_traveltimes,clip_value_max=self.free_flow_traveltimes*10))
 
         # if self.polynomial_layer is not None:
-        #     flows = self.polynomial_layer.transform_flows(flows = flows, period_ids= self.period_ids)
+        #     flows = self.polynomial_layer.transform_flows(flows = flows, period_ids= self.period_ids)x
 
         # input = self.model(tf.einsum("ijk,j -> ijk", flows, 1/self.capacities))
 
@@ -1472,7 +1472,7 @@ class NESUELOGIT(PESUELOGIT):
 
         # return self.tt_ff * (1 + self.alpha * tf.math.pow(x / k, self.beta))
 
-    def traveltimes(self, flows=None):
+    def traveltimes(self, flows=None, stop_gradient = False):
         """ Return tensor variable associated to endogenous travel times (assumed dependent on link flows)"""
 
         if self.performance_function.type == 'bpr':
@@ -1492,40 +1492,51 @@ class NESUELOGIT(PESUELOGIT):
 
         #tf.reduce_sum(self._flows)
 
-        traveltimes = self.performance_function.call(flows)
+        if stop_gradient:
+            traveltimes = tf.stop_gradient(self.performance_function.call(flows))
+        else:
+            traveltimes = self.performance_function.call(flows)
+
         traveltimes = self.mask_predicted_traveltimes(tt=traveltimes,
-                                                      k=np.array([link.bpr.k for link in self.network.links]),
-                                                      max_factor=self.performance_function.max_traveltime_factor)
+                                                      k=np.array([link.bpr.k for link in self.network.links]),max_factor=self.performance_function.max_traveltime_factor)
 
         return traveltimes
 
         # return tf.experimental.numpy.take(traveltimes,tf.cast(self.period_ids[:,0], dtype = tf.int32),0)
 
-    def output_traveltime(self, flows=None):
+    def output_traveltime(self, flows = None):
         """ Return tensor variable associated to endogenous travel times (assumed dependent on link flows)"""
 
-        if self.performance_function.type == 'bpr':
-            if flows is None:
-                flows = self.output_flow()
+        if flows is None:
+            flows = self.output_flow()
 
-        elif self.performance_function.type == 'mlp':
+        return self.traveltimes(flows, stop_gradient = False)
 
-            if flows is None:
-                flows = self.output_flow()
+        # if self.performance_function.type == 'bpr':
+        #     if flows is None:
+        #         flows = self.output_flow()
+        #
+        # elif self.performance_function.type == 'mlp':
+        #
+        #     if flows is None:
+        #         flows = self.output_flow()
+        #
+        #     flows = self.performance_function.polynomial_layer.transform_flows(
+        #         flows,
+        #         capacities=self.performance_function.capacities,
+        #         period_ids=self.period_ids,
+        #         n_periods=self.n_periods)
+        #
+        # traveltimes = self.performance_function.call(flows)
+        #
+        # traveltimes = self.mask_predicted_traveltimes(tt=traveltimes,
+        #                                               k=np.array([link.bpr.k for link in self.network.links]),
+        #                                               max_factor=self.performance_function.max_traveltime_factor)
+        #
+        # return traveltimes
 
-            flows = self.performance_function.polynomial_layer.transform_flows(
-                flows,
-                capacities=self.performance_function.capacities,
-                period_ids=self.period_ids,
-                n_periods=self.n_periods)
-
-        traveltimes = self.performance_function.call(flows)
-
-        traveltimes = self.mask_predicted_traveltimes(tt=traveltimes,
-                                                      k=np.array([link.bpr.k for link in self.network.links]),
-                                                      max_factor=self.performance_function.max_traveltime_factor)
-
-        return traveltimes
+    def input_traveltimes(self, flows = None):
+        return self.traveltimes(flows, stop_gradient=False)
 
     def predicted_traveltime(self):
         return self._predicted_traveltime
@@ -1566,7 +1577,7 @@ class NESUELOGIT(PESUELOGIT):
         #     # return tf.einsum("ijkl,l -> ijk", X, self.theta[1:])+ self.theta[0]*self.traveltimes() + self.fixed_effect
         #     return theta[0] * self.traveltimes() + tf.einsum("ikl,l -> ik", X[:, :, :-1], theta[1:]) + self.fixed_effect
 
-        return self.traveltimes() * tf.expand_dims(theta[:, 0], 1) \
+        return self.input_traveltimes() * tf.expand_dims(theta[:, 0], 1) \
             + tf.einsum("ijk,ik -> ij", X[:, :, :-1], theta[:, 1:]) + self.fixed_effect
 
     def path_probabilities_sparse(self, vf, normalization=False):
@@ -1793,9 +1804,9 @@ class NESUELOGIT(PESUELOGIT):
                                    dense_shape=(self.n_periods, self.od.n_nodes, self.od.n_nodes)
                                    )
         if normalization:
-            normalized_values = V.values - tf.stop_gradient(
-                tf.reshape(tf.repeat(tf.sparse.reduce_max(V, axis=2), tf.sparse.reduce_sum(self.od.L_sparse, axis=1),
-                                     axis=1), [-1]))
+            normalized_values = V.values - tf.reshape(tf.repeat(tf.stop_gradient(tf.sparse.reduce_max(V, axis=2)),
+                                                                tf.sparse.reduce_sum(self.od.L_sparse, axis=1),
+                                     axis=1), [-1])
 
             V = tf.sparse.SparseTensor(indices=indices,
                                        values=tf.exp(normalized_values),
@@ -1821,13 +1832,12 @@ class NESUELOGIT(PESUELOGIT):
 
         # TODO: review choice of axis to sum on
         # g = tf.repeat(self.g, tf.sparse.reduce_sum(self.od.L_sparse, axis=1), axis=1)
+        # Number of total trips that are generated in the origin associated with each o-d pair
         god = tf.experimental.numpy.take(self.g, self.o, axis=1)
 
         # tf.sparse.to_dense(self.od.L_sparse)
 
         q = god * self.phi
-
-        # tf.reduce_sum(g, axis = 1)
 
         return q
 
@@ -2053,20 +2063,6 @@ class NESUELOGIT(PESUELOGIT):
 
         return link_flows
 
-    def compute_travel_times(self, X):
-
-        # self.period_ids = X[:, :, -1]
-
-        link_flows = self.link_flows(
-            self.path_flows(self.path_probabilities(self.path_utilities(self.link_utilities(X)))))
-
-        # if tf.rank(link_flows) == 2:
-        #     return self.split_link_flows_period(link_flows)
-
-        # return tf.reduce_mean(link_flows,axis = 0)
-
-        return link_flows
-
     def path_flows(self, pf):
         # TODO: Test and try to combine the einsums if possible to avoid ifelse clause
 
@@ -2265,6 +2261,11 @@ class NESUELOGIT(PESUELOGIT):
 
         if 'equilibrium' not in epochs.keys() or epochs['equilibrium'] < 0:
             epochs['equilibrium'] = 0
+
+        for optimizer in optimizers.values():
+            if optimizer is not None:
+                for var in optimizer.variables():
+                    var.assign(tf.zeros_like(var))
 
         metric_name = evaluation_metric.__name__
         prefix_metric = metric_name + '_'
@@ -2587,7 +2588,8 @@ class NESUELOGIT(PESUELOGIT):
                                                 epoch=epoch)
 
                 if Y_train is not None:
-                    train_loss = {**train_loss, **self.compute_loss_metric(metric=evaluation_metric, prefix_metric=prefix_metric)}
+                    train_loss = {**train_loss, **self.compute_loss_metric(metric=evaluation_metric,
+                                                                           prefix_metric=prefix_metric)}
 
                 # train_loss = {**train_loss, **self.compute_loss_metric(metric=mape, prefix_metric='mape')}
 
@@ -2595,7 +2597,8 @@ class NESUELOGIT(PESUELOGIT):
 
                 if X_val is not None and Y_val is not None:
                     val_loss = self.loss_function(X=X_val, Y=Y_val, lambdas=loss_weights, loss_metric=mse, epoch=epoch)
-                    val_loss = {**val_loss, **self.compute_loss_metric(metric=evaluation_metric, prefix_metric=prefix_metric)}
+                    val_loss = {**val_loss, **self.compute_loss_metric(metric=evaluation_metric,
+                                                                       prefix_metric=prefix_metric)}
 
                 train_losses.append(train_loss)
                 val_losses.append(val_loss)
@@ -3263,7 +3266,7 @@ def create_mlp_fresno(network, homogenous = False, diagonal = False, adjacency_c
 def create_mlp_tntp(network, homogenous = True, diagonal = False, adjacency_constraint = True,
                     poly_order = 3, link_specific = False, symmetric = False,
                     alpha_prior = 0.15, beta_prior = 4, pretrain = False, dtype =tf.float32,
-                    max_traveltime_factor = None):
+                    max_traveltime_factor = None, trainable_kernel = True, trainable_polynomial = True):
 
     return MLP(n_links=len(network.links),
                free_flow_traveltimes=[link.bpr.tf for link in network.links],
@@ -3282,9 +3285,9 @@ def create_mlp_tntp(network, homogenous = True, diagonal = False, adjacency_cons
                    bounds_clipping = [0,10],
                    # min_diagonal_value = 1e-1
                ),
-               trainable = True,
+               trainable = trainable_kernel,
                polynomial_layer= PolynomialLayer(poly_order=poly_order,
-                                                 trainable = True,
+                                                 trainable = trainable_polynomial,
                                                  pretrain_weights= pretrain,
                                                  alpha_prior = alpha_prior, beta_prior=beta_prior,
                                                  kernel_constraint=tf.keras.constraints.NonNeg(),
@@ -3320,8 +3323,8 @@ def create_model_tntp(network, model_key = '', dtype=tf.float32, n_periods=1, fe
     # utility_parameters.random_initializer((0, 0), ['tt', 'tt_sd', 's'])
 
     if performance_function is None:
-        # performance_function = create_bpr(network = network, dtype = dtype)
-        performance_function = create_mlp_tntp(network = network, dtype = dtype)
+        performance_function = create_bpr(network = network, dtype = dtype)
+        # performance_function = create_mlp_tntp(network = network, dtype = dtype)
 
     # generation_parameters = None
 
@@ -3461,44 +3464,34 @@ def create_model_fresno(network, model_key = 'tvgodlulpe', dtype=tf.float32, n_p
     return model, {'utility_parameters': utility_parameters, 'generation_parameters': generation_parameters,
                    'od_parameters': od_parameters, 'performance_function': performance_function}
 
-def create_tvgodlulpe_model_tntp(network, n_periods, historic_g, historic_q, features_Z, dtype = tf.float32):
-    return create_model_tntp(
-        model_key = 'tvgodlulpe',
-        n_periods= n_periods, network = network,
-        historic_g= historic_g,
-        utility_parameters = UtilityParameters(features_Y=['tt'],
-                                               features_Z=features_Z,
-                                               initial_values={
-                                                   'tt': -1e-0, 'tt_sd': -1e-0, 's': -1e-0, 'psc_factor': 0,
-                                                   # 'tt': -1e-1, 'tt_sd': -1e-1, 's': -1e-1, 'psc_factor': 0,
-                                                   'fixed_effect': np.zeros_like(network.links)},
-                                               true_values={'tt': -1, 'tt_sd': -1.3, 's': -3},
-                                               # signs={'tt': '-', 'tt_sd': '-', 's': '-'},
-                                               time_varying=True,
-                                               dtype=dtype,
-                                               trainables={'tt': True, 'tt_sd': True, 's': True,
-                                                           'psc_factor': False, 'fixed_effect': True},
+def create_suelogit(network, n_periods, historic_q, features_Z, dtype = tf.float32):
+    return create_model_tntp(network=network,
+                      model_key='suelogit',
+                      n_periods=n_periods,
+                      performance_function=BPR(keys=['alpha', 'beta'],
+                                               initial_values={'alpha': 0.15, 'beta': 4},
+                                               trainables={'alpha': True, 'beta': True},
+                                               capacities=[link.bpr.k for link in network.links],
+                                               free_flow_traveltimes=[link.bpr.tf for link in network.links],
+                                               dtype=dtype
                                                ),
-        # For fair comparison against bpr, the interaction parameter is assumed homogenous
-        performance_function = create_mlp_tntp(network = network, adjacency_constraint = True,
-                                               symmetric = False, diagonal = False, homogenous = False,
-                                               poly_order = 3,
-                                               # alpha_prior = 1, beta_prior = 1,
-                                               pretrain = False,
-                                               dtype = dtype, max_traveltime_factor=None),
-        od_parameters = ODParameters(key='od',
-                                     #initial_values= generation_factors.values[:,np.newaxis]*network.q.flatten(),
-                                     initial_values = tf.stack(historic_q),
-                                     historic_values={0: historic_q[0], 1:historic_q[1]},
-                                     ods=network.ods,
-                                     n_nodes = len(network.nodes),
-                                     n_periods=n_periods,
-                                     time_varying=True,
-                                     trainable=True),
-        generation = True,
-        utility  = True,
-
-    )[0]
+                      utility_parameters=UtilityParameters(features_Y=['tt'],
+                                                           features_Z=features_Z,
+                                                           initial_values={'tt': -1, 'tt_sd': -1.3, 's': -3,
+                                                                           'psc_factor': 0,
+                                                                           'fixed_effect': np.zeros_like(
+                                                                               network.links)},
+                                                           time_varying=True,
+                                                           dtype=dtype
+                                                           ),
+                      od_parameters=ODParameters(key='od',
+                                                 initial_values=historic_q,
+                                                 ods=network.ods,
+                                                 n_nodes=len(network.nodes),
+                                                 n_periods=n_periods,
+                                                 time_varying=True,
+                                                 trainable=False),
+                      generation=False)
 
 def create_tvodlulpe_model_tntp(network, n_periods, historic_g, historic_q, features_Z, dtype = tf.float32):
 
@@ -3507,6 +3500,14 @@ def create_tvodlulpe_model_tntp(network, n_periods, historic_g, historic_q, feat
         n_periods=n_periods, network=network,
         historic_g=historic_g,
         performance_function=create_bpr(network=network, dtype=dtype, max_traveltime_factor=None),
+        # performance_function = create_mlp_tntp(network = network, adjacency_constraint = True,
+        #                                        symmetric = False, diagonal = True, homogenous = True,
+        #                                        poly_order = 3,
+        #                                        alpha_prior = 1, beta_prior = 4,
+        #                                        pretrain = False,
+        #                                        trainable_kernel = False,
+        #                                        trainable_polynomial= True,
+        #                                        dtype = dtype, max_traveltime_factor=None),
         utility_parameters=UtilityParameters(features_Y=['tt'],
                                              features_Z=features_Z,
                                              # initial_values={'tt': 0, 'tt_sd': 0, 's': 0, 'psc_factor': 0,
@@ -3535,6 +3536,48 @@ def create_tvodlulpe_model_tntp(network, n_periods, historic_g, historic_q, feat
         utility=True,
     )[0]
 
+def create_tvgodlulpe_model_tntp(network, n_periods, historic_g, historic_q, features_Z, dtype = tf.float32):
+    return create_model_tntp(
+        model_key = 'tvgodlulpe',
+        n_periods= n_periods, network = network,
+        historic_g= historic_g,
+        utility_parameters = UtilityParameters(features_Y=['tt'],
+                                               features_Z=features_Z,
+                                               initial_values={
+                                                   'tt': -1e-0, 'tt_sd': -1e-0, 's': -1e-0, 'psc_factor': 0,
+                                                   # 'tt': -1e-1, 'tt_sd': -1e-1, 's': -1e-1, 'psc_factor': 0,
+                                                   'fixed_effect': np.zeros_like(network.links)},
+                                               true_values={'tt': -1, 'tt_sd': -1.3, 's': -3},
+                                               # signs={'tt': '-', 'tt_sd': '-', 's': '-'},
+                                               time_varying=True,
+                                               dtype=dtype,
+                                               trainables={'tt': True, 'tt_sd': True, 's': True,
+                                                           'psc_factor': False, 'fixed_effect': True},
+                                               ),
+
+        # performance_function=create_bpr(network=network, dtype=dtype, alpha_prior=0.9327, beta_prior=4.1017),
+        performance_function = create_mlp_tntp(network = network, adjacency_constraint = True,
+                                               symmetric = False, diagonal = False, homogenous = False,
+                                               poly_order = 3,
+                                               alpha_prior = 1, beta_prior = 4,
+                                               pretrain = False,
+                                               trainable_kernel = True,
+                                               trainable_polynomial= True,
+                                               dtype = dtype, max_traveltime_factor=None),
+        od_parameters = ODParameters(key='od',
+                                     #initial_values= generation_factors.values[:,np.newaxis]*network.q.flatten(),
+                                     initial_values = tf.stack(historic_q),
+                                     historic_values={0: historic_q[0], 1:historic_q[1]},
+                                     ods=network.ods,
+                                     n_nodes = len(network.nodes),
+                                     n_periods=n_periods,
+                                     time_varying=True,
+                                     trainable=True),
+        generation = True,
+        utility  = True,
+
+    )[0]
+
 def create_tvodlulpe_model_fresno(network, n_periods, historic_q, features_Z, dtype = tf.float32):
     return create_model_fresno(
         model_key = 'tvodlulpe',
@@ -3554,13 +3597,15 @@ def create_tvodlulpe_model_fresno(network, n_periods, historic_q, features_Z, dt
         features_Z = features_Z
     )[0]
 
-def create_tvgodlulpe_model_fresno(network, n_periods, historic_q, historic_g, features_Z):
+def create_tvgodlulpe_model_fresno(network, n_periods, historic_q, historic_g, features_Z, dtype = tf.float32):
     return create_model_fresno(
         model_key='tvgodlulpe',
         n_periods = n_periods,
         network = network,
         performance_function = create_mlp_fresno(network = network,poly_order = 4, pretrain = False,
-                                                 link_specific = False, diagonal = False, homogenous = False),
+                                                 link_specific = False, diagonal = False, homogenous = False,
+                                                 dtype = dtype),
+        # performance_function=create_bpr(network=network, dtype=dtype, alpha_prior=0.9327, beta_prior=4.1017),
         historic_g= historic_g,
         historic_q = historic_q,
         generation = True,
