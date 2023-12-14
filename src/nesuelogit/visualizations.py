@@ -145,13 +145,14 @@ def plot_baselines_kfold(df, metric_name='mape', sharex=True, sharey=True, **kwa
     return fig, ax
 
 
-def plot_parameters_kfold(df, n_cols_legend = 2, figsize = (5.5,5.5), hour_label = False, style = 'whitegrid', **kwargs):
+def plot_parameters_kfold(df, n_cols_legend = 2, figsize = (5.5,5.5), hour_label = False, style = 'whitegrid',
+                          rotation_xticks = 0, **kwargs):
     # bbox_to_anchor_utility = [0.27, -0.15]
 
     sns.set_style(style)
 
     fig, axs = plt.subplots(1, 1, tight_layout=True, figsize=figsize)
-    bbox_to_anchor = [0.55, -0.15]
+    bbox_to_anchor = [0.55, -0.17]
 
     x_label = 'period'
 
@@ -168,6 +169,7 @@ def plot_parameters_kfold(df, n_cols_legend = 2, figsize = (5.5,5.5), hour_label
                        bbox_transform=BlendedGenericTransform(fig.transFigure, axs.transAxes))
 
     sns.set_style("ticks")
+    plt.xticks(rotation=rotation_xticks)
 
     return fig, axs
 
@@ -252,18 +254,22 @@ def plot_predictive_performance(train_losses: pd.DataFrame,
                                 epochs_end_learning_stage: int = None,
                                 xticks_spacing: int = 5,
                                 show_validation=False,
+                                show_equilibrium_stage_line = False,
                                 curves=None,
                                 prefix_metric='loss',
                                 yaxis_label='relative mse (%)',
                                 **kwargs):
     # fig, ax = plt.subplots(figsize = (5,4))
 
-    fig, ax = plt.subplots(figsize=(5.5, 5), tight_layout=True)
+    if show_equilibrium_stage_line or show_validation:
+        fig, ax = plt.subplots(figsize=(5.5, 5), tight_layout=True)
+    else:
+        fig, ax = plt.subplots(figsize=(5, 4))
 
     if curves is None:
         curves = ['travel time', 'link flow', 'equilibrium']
 
-    if epochs_end_learning_stage is not None:
+    if epochs_end_learning_stage is not None and show_equilibrium_stage_line:
         ax.axvline(epochs_end_learning_stage, linestyle='dotted', color='black')
 
     patches = []
@@ -309,8 +315,8 @@ def plot_predictive_performance(train_losses: pd.DataFrame,
     ticks = np.arange(train_losses['epoch'].min(), train_losses['epoch'].max() + xticks_spacing, xticks_spacing)
 
     ax.set_xticks(np.arange(train_losses['epoch'].min(), train_losses['epoch'].max() + 1, xticks_spacing))
-    ax.set_xlim(xmin=train_losses['epoch'].min(), xmax=train_losses['epoch'].max() + 2)
-    ax.set_xlim(-1, None)
+    # ax.set_xlim(xmin=train_losses['epoch'].min(), xmax=train_losses['epoch'].max())
+    ax.set_xlim(train_losses['epoch'].min()-(xticks_spacing*0.2), train_losses['epoch'].max()+(xticks_spacing*0.2))
 
     # plt.ylim(ymin=0, ymax=100)
     ax.set_ylim(ymin=0)
@@ -319,42 +325,90 @@ def plot_predictive_performance(train_losses: pd.DataFrame,
     # ax.set_ylabel('loss')
     ax.set_ylabel(yaxis_label)
 
-    training_line = plt.Line2D((0, 1), (0, 0), color='black', linestyle='solid', label='training loss')
-    validation_line = plt.Line2D((0, 1), (0, 0), color='black', linestyle='dashed', label='validation loss')
-    equilibrium_stage_line = plt.Line2D((0, 1), (0, 0), color='black', linestyle='dotted',
-                                        label='start of equilibrium stage')
+    if show_equilibrium_stage_line:
 
-    legend_size = 9
+        training_line = plt.Line2D((0, 1), (0, 0), color='black', linestyle='solid', label='training loss')
+        validation_line = plt.Line2D((0, 1), (0, 0), color='black', linestyle='dashed', label='validation loss')
+        equilibrium_stage_line = plt.Line2D((0, 1), (0, 0), color='black', linestyle='dotted',
+                                            label='start of equilibrium stage')
 
-    if show_validation:
-        legend1 = plt.legend(handles=[training_line, validation_line, equilibrium_stage_line], loc='upper center',
-                             ncol=3,
-                             # , prop={'size': self.fontsize}
-                             bbox_to_anchor=[0.52, -0.15],
+        legend_size = 9
+
+        handles = [training_line, equilibrium_stage_line]
+
+        if show_validation:
+            handles = [training_line, validation_line, equilibrium_stage_line]
+            legend1 = plt.legend(handles=handles, loc='upper center',
+                                 ncol=3,
+                                 # , prop={'size': self.fontsize}
+                                 bbox_to_anchor=[0.52, -0.15],
+                                 bbox_transform=BlendedGenericTransform(fig.transFigure, ax.transAxes),
+                                 prop={'size': legend_size}
+                                 )
+
+        else:
+            legend1 = plt.legend(handles=handles, loc='upper center',
+                                 ncol=2,
+                                 # , prop={'size': self.fontsize}
+                                 bbox_to_anchor=[0.52, -0.15],
+                                 bbox_transform=BlendedGenericTransform(fig.transFigure, ax.transAxes),
+                                 prop={'size': legend_size})
+
+        ax.add_artist(legend1)
+
+        legend2 = plt.legend(handles=patches, loc='upper center', ncol=len(patches),   # , prop={'size': self.fontsize}
+                             bbox_to_anchor=[0.52, -0.26],
                              bbox_transform=BlendedGenericTransform(fig.transFigure, ax.transAxes),
                              prop={'size': legend_size}
                              )
+        #ax.add_artist(legend2)
+
+        # legend2 = plt.legend(handles=[train_patch, val_patch], handleheight=1e-2, loc='upper center', ncol=2#, prop={'size': self.fontsize}
+        #            , bbox_to_anchor=[0.52, -0.4]
+        #            , bbox_transform=BlendedGenericTransform(fig.transFigure, ax.transAxes))
+
+    elif show_validation:
+
+        training_line = plt.Line2D((0, 1), (0, 0), color='black', linestyle='solid', label='training loss')
+        validation_line = plt.Line2D((0, 1), (0, 0), color='black', linestyle='dashed', label='validation loss')
+
+        legend_size = 9
+
+        handles = [training_line]
+
+        if show_validation:
+            handles = [training_line, validation_line]
+            legend1 = plt.legend(handles=handles, loc='upper center',
+                                 ncol=2,
+                                 # , prop={'size': self.fontsize}
+                                 bbox_to_anchor=[0.52, -0.15],
+                                 bbox_transform=BlendedGenericTransform(fig.transFigure, ax.transAxes),
+                                 prop={'size': legend_size}
+                                 )
+
+        else:
+            legend1 = plt.legend(handles=handles, loc='upper center',
+                                 ncol=1,
+                                 # , prop={'size': self.fontsize}
+                                 bbox_to_anchor=[0.52, -0.15],
+                                 bbox_transform=BlendedGenericTransform(fig.transFigure, ax.transAxes),
+                                 prop={'size': legend_size})
+
+        ax.add_artist(legend1)
+
+        legend2 = plt.legend(handles=patches, loc='upper center', ncol=len(patches),   # , prop={'size': self.fontsize}
+                             bbox_to_anchor=[0.52, -0.26],
+                             bbox_transform=BlendedGenericTransform(fig.transFigure, ax.transAxes),
+                             prop={'size': legend_size}
+                             )
+        #ax.add_artist(legend2)
+
+        # legend2 = plt.legend(handles=[train_patch, val_patch], handleheight=1e-2, loc='upper center', ncol=2#, prop={'size': self.fontsize}
+        #            , bbox_to_anchor=[0.52, -0.4]
+        #            , bbox_transform=BlendedGenericTransform(fig.transFigure, ax.transAxes))
 
     else:
-        legend1 = plt.legend(handles=[training_line, equilibrium_stage_line], loc='upper center',
-                             ncol=2,
-                             # , prop={'size': self.fontsize}
-                             bbox_to_anchor=[0.52, -0.15],
-                             bbox_transform=BlendedGenericTransform(fig.transFigure, ax.transAxes),
-                             prop={'size': legend_size})
-
-    ax.add_artist(legend1)
-
-    legend2 = plt.legend(handles=patches, loc='upper center', ncol=len(patches),   # , prop={'size': self.fontsize}
-                         bbox_to_anchor=[0.52, -0.26],
-                         bbox_transform=BlendedGenericTransform(fig.transFigure, ax.transAxes),
-                         prop={'size': legend_size}
-                         )
-    #ax.add_artist(legend2)
-
-    # legend2 = plt.legend(handles=[train_patch, val_patch], handleheight=1e-2, loc='upper center', ncol=2#, prop={'size': self.fontsize}
-    #            , bbox_to_anchor=[0.52, -0.4]
-    #            , bbox_transform=BlendedGenericTransform(fig.transFigure, ax.transAxes))
+        plt.legend(loc="upper right", bbox_to_anchor=(1, 1), bbox_transform=ax.transAxes, prop={'size': 10})
 
     plt.tight_layout()
     fig.subplots_adjust(top=0.95, bottom=0.28)
@@ -487,21 +541,26 @@ def plot_flow_vs_traveltime(model, period_col = None, observed_traveltime=None, 
         plot_data['observed_flow'] = observed_flow
         # plot_data = plot_data.dropna()
 
-        sns.scatterplot(data=plot_data, x='observed_flow', y='observed_traveltime', hue=hue, ax=axs[0, 0], **kwargs)
+        sns.scatterplot(data=plot_data, x='observed_flow', y='observed_traveltime', hue=hue, ax=axs[0, 0],
+                        legend = False, **kwargs)
         axs[0,0].set_xlabel('observed flow')
         axs[0,0].set_ylabel('observed travel time')
 
-        sns.scatterplot(data=plot_data, x='predicted_flow', y='predicted_traveltime', hue=hue, ax=axs[0, 1], **kwargs)
+        sns.scatterplot(data=plot_data, x='predicted_flow', y='predicted_traveltime', hue=hue, ax=axs[0, 1],
+                        legend = False, **kwargs)
         axs[0,1].set_xlabel('estimated flow')
         axs[0,1].set_ylabel('estimated travel time')
 
-        sns.scatterplot(data=plot_data, x='observed_flow', y='predicted_flow', hue=hue, ax=axs[1, 0], **kwargs)
+        sns.scatterplot(data=plot_data, x='observed_flow', y='predicted_flow', hue=hue, ax=axs[1, 0],
+                        legend = False, **kwargs)
         axs[1,0].set_xlabel('observed flow')
         axs[1,0].set_ylabel('estimated flow')
 
-        sns.scatterplot(data=plot_data, x='observed_traveltime', y='predicted_traveltime', hue=hue, ax=axs[1, 1], **kwargs)
+        sns.scatterplot(data=plot_data, x='observed_traveltime', y='predicted_traveltime', hue=hue, ax=axs[1, 1],
+                        **kwargs)
         axs[1,1].set_xlabel('observed travel time')
         axs[1,1].set_ylabel('estimated travel time')
+        # axs[1,1].legend.set_visible(False)
 
         # sns.regplot(data=plot_data, x='observed_flow', y='observed_traveltime', ax=axs[0, 0], **kwargs)
         # sns.regplot(data=plot_data, x='predicted_flow', y='predicted_traveltime', ax=axs[0, 1], **kwargs)
@@ -531,10 +590,15 @@ def plot_flow_vs_traveltime(model, period_col = None, observed_traveltime=None, 
             # ax.set_xlim(xmin=0)
             # ax.set_ylim(ymin=0)
             ax.margins(x=0.05, y=0.05)
-            ax.legend(title=hue)
+            # ax.legend(title=hue)
 
             # if np.sum(plot_data.sign == 'inconsistent') == 0:
             #     ax.get_legend().remove()
+
+        n_periods = len(plot_data[hue].unique())
+
+        legend = fig.legend(loc='upper center', bbox_to_anchor=(0.5, 0.05), ncol=n_periods)
+        legend.set_title(hour_label)
 
     return fig, axs
 
@@ -685,7 +749,9 @@ def plot_convergence_estimates(estimates: pd.DataFrame,
     # fig.set_size_inches(4, 3)
 
     plt.xticks(np.arange(estimates['epoch'].min(), estimates['epoch'].max() + 1, xticks_spacing))
-    plt.xlim(xmin=estimates['epoch'].min(), xmax=estimates['epoch'].max() + 2)
+    # plt.xlim(xmin=estimates['epoch'].min(), xmax=estimates['epoch'].max() + 2)
+    ax.set_xlim(estimates['epoch'].min() - (xticks_spacing * 0.2),
+                estimates['epoch'].max() + (xticks_spacing * 0.2))
 
     plt.legend(prop={'size': 10})
 
@@ -743,7 +809,8 @@ def plot_heatmap_demands(Qs: Dict[str, Matrix],
     return fig, ax
 
 
-def plot_top_od_flows_periods(model, period_feature, period_keys, historic_od, top_k=10):
+def plot_top_od_flows_periods(model, period_feature, period_keys, historic_od, top_k=10, join_points = False,
+                              rotation_xticks = 0):
     """
     Plot top od pairs according to the largest number of trips reported in historic OD matrix
     """
@@ -799,18 +866,20 @@ def plot_top_od_flows_periods(model, period_feature, period_keys, historic_od, t
 
     if total_trips_by_hour.shape[0] > 1:
         g = sns.pointplot(data=total_trips_by_hour, x=period_feature, y='total_trips', ax=ax,
-                          label='estimated ODs', join=False)
+                          label='estimated ODs', join=join_points)
 
     else:
         g = sns.pointplot(data=total_trips_by_hour, x=period_feature, y='total_trips', ax=ax,
-                          join=False)
+                          join=join_points)
 
         g.axhline(total_trips_by_hour['total_trips'].values[0], label='estimated od', linestyle='solid')
 
     g.axhline(q_df.sum(axis=0)[0], label='historic od', linestyle='dashed')
     plt.ylabel('total trips', fontsize=12)
-
+    plt.xticks(rotation=rotation_xticks)
     ax.legend()
+
+
 
     # plt.show()
 
@@ -820,7 +889,7 @@ def plot_top_od_flows_periods(model, period_feature, period_keys, historic_od, t
     return top_q, total_trips_by_hour
 
 
-def plot_rr_by_period_models(models, period_keys, period_feature='hour', **kwargs):
+def plot_rr_by_period_models(models, period_keys, period_feature='hour', rotation_xticks = 0, **kwargs):
     rr_by_hour_models = []
     for model_key, model in models.items():
 
@@ -870,6 +939,7 @@ def plot_rr_by_period_models(models, period_keys, period_feature='hour', **kwarg
 
     plt.xlabel(period_feature)
     plt.ylabel('reliability ratio', fontsize=12)
+    plt.xticks(rotation=rotation_xticks)
     # ax.legend()
     # plt.legend(loc='upper left')
     # ax.get_legend().remove()
@@ -877,8 +947,9 @@ def plot_rr_by_period_models(models, period_keys, period_feature='hour', **kwarg
     return rr_by_hour_models
 
 
-def plot_rr_by_period(model, period_keys, model_key = '', period_feature='hour'):
-    plot_rr_by_period_models({model_key: model}, period_keys=period_keys, period_feature=period_feature)
+def plot_rr_by_period(model, period_keys, rotation_xticks = 0, model_key = '', period_feature='hour'):
+    plot_rr_by_period_models({model_key: model}, rotation_xticks = rotation_xticks,
+                             period_keys=period_keys, period_feature=period_feature)
 
 
 def compute_total_trips_models(models, period_feature, period_keys):
