@@ -2375,7 +2375,7 @@ class NESUELOGIT(PESUELOGIT):
         total_epochs = epochs['learning']
         # relative_gap = float('inf')
 
-        if equilibrium_stage:
+        if equilibrium_stage or epochs['equilibrium']>0:
             total_epochs += epochs['equilibrium']
 
         current_stage = 'equilibrium'
@@ -2815,7 +2815,7 @@ def train_kfold(model: NESUELOGIT,
         with block_output(show_stdout=False, show_stderr=False):
             kwargs['evaluation_metric'] = evaluation_metric
             model.fit(X_train, Y_train, X_val, Y_val, *args,
-                      **{**kwargs, **{'epochs': {'training': 0, 'equilibrium': 0}}})
+                      **{**kwargs, **{'epochs': {'learning': 0, 'equilibrium': 0}}})
 
         for X_cur, Y_cur, dataset_label in [(X_train, Y_train, 'training'), (X_val, Y_val, 'validation')]:
             cur_metrics_df = model.compute_loss_metrics(metrics={metric_name: evaluation_metric, 'mse': mse, 'r2': r2_score},
@@ -3404,7 +3404,7 @@ def create_model_fresno(network, model_key = 'tvgodlulpe', dtype=tf.float32, n_p
                 'incidents': -4.5368, 'bus_stops': 0, 'intersections': -3.8788,
                 'psc_factor': 0,
                 'fixed_effect': np.zeros_like(network.links)},
-            signs={'tt': '-', 'tt_sd': '-', 'median_inc': '+', 'incidents': '-',
+            signs={'tt': '-', 'median_inc': '+', 'incidents': '-', #, 'tt_sd': '-'
                    'bus_stops': '-', 'intersections': '-'},
             trainables={'psc_factor': False, 'fixed_effect': utility_trainable,
                         'tt': utility_trainable, 'tt_sd': utility_trainable, 'intersections': utility_trainable,
@@ -3582,7 +3582,10 @@ def create_tvodlulpe_model_fresno(network, n_periods, historic_q, features_Z, dt
     return create_model_fresno(
         model_key = 'tvodlulpe',
         n_periods= n_periods, network = network,
-        performance_function = create_bpr(network = network, dtype = dtype, alpha_prior = 0.9327, beta_prior = 4.1017),
+        # performance_function = create_bpr(network = network, dtype = dtype, alpha_prior = 0.9327, beta_prior = 4.1017),
+        performance_function=create_mlp_fresno(network=network, poly_order=4, pretrain=False,
+                                               link_specific=False, diagonal=False, homogenous=False,
+                                               dtype=dtype),
         od_parameters = ODParameters(key='od',
                                      #initial_values= generation_factors.values[:,np.newaxis]*tntp_network.q.flatten(),
                                      initial_values = tf.stack(historic_q),
@@ -3602,7 +3605,7 @@ def create_tvgodlulpe_model_fresno(network, n_periods, historic_q, historic_g, f
         model_key='tvgodlulpe',
         n_periods = n_periods,
         network = network,
-        performance_function = create_mlp_fresno(network = network,poly_order = 4, pretrain = False,
+        performance_function = create_mlp_fresno(network = network,poly_order = 3, pretrain = False,
                                                  link_specific = False, diagonal = False, homogenous = False,
                                                  dtype = dtype),
         # performance_function=create_bpr(network=network, dtype=dtype, alpha_prior=0.9327, beta_prior=4.1017),
