@@ -1730,7 +1730,13 @@ class NESUELOGIT(PESUELOGIT):
 
         self._kappa.assign(kappa)
 
+        # Constrain fixed effect of generation model to be positive
+        # fixed_effect_generation = tf.nn.relu(fixed_effect_generation)
         self._fixed_effect_generation.assign(tf.convert_to_tensor(fixed_effect_generation, self.dtype))
+        # self._fixed_effect_generation.assign(tf.convert_to_tensor(np.sqrt(fixed_effect_generation), self.dtype))
+
+        #TODO: I may rerun regression for pretraining by fixed new fixed effect (if one is negative) and only estimating
+        # kappa coefficients.
 
     def mask_generation_nodes(self, g):
         """
@@ -1761,10 +1767,17 @@ class NESUELOGIT(PESUELOGIT):
 
         # return g
         # return tf.nn.relu(self.mask_generation_nodes(g))
-        return self.generation.prelu(g)
+        # g = tf.math.pow(self._fixed_effect_generation, 2) + tf.matmul(self.kappa, self.node_data.T)
+        #
+        # return self._fixed_effect_generation + tf.matmul(self.kappa, self.node_data.T)
+
+        # return tf.nn.relu(self.mask_generation_nodes(g))
+        return self.generation.prelu(self.mask_generation_nodes(g))
+
 
     @property
     def utility_ods(self):
+
         '''
         Using origin and destination specific effects can decrease the number of parameters but it may ncrease training
         time due to the 'take' operation.
@@ -1839,12 +1852,10 @@ class NESUELOGIT(PESUELOGIT):
         # g = tf.repeat(self.g, tf.sparse.reduce_sum(self.od.L_sparse, axis=1), axis=1)
         # Number of total trips that are generated in the origin associated with each o-d pair
         god = tf.experimental.numpy.take(self.g, self.o, axis=1)
-
         # tf.sparse.to_dense(self.od.L_sparse)
+        # q = god * self.phi
 
-        q = god * self.phi
-
-        return q
+        return tf.einsum("ij, ij -> ij", god , self.phi)
 
     @property
     def Q(self, average=False):
@@ -1978,6 +1989,7 @@ class NESUELOGIT(PESUELOGIT):
             # Link specific effect (act as an intercept)
             self._fixed_effect_generation = tf.Variable(
                 initial_value=tf.cast(initial_values['fixed_effect_generation'], dtype=self.dtype),
+                # initial_value=tf.cast(np.sqrt(initial_values['fixed_effect_generation']), dtype=self.dtype),
                 trainable=self.generation.trainables['fixed_effect'],
                 name='fixed_effect_generation',
                 dtype=self.dtype)
@@ -2005,13 +2017,13 @@ class NESUELOGIT(PESUELOGIT):
                                           trainable=self.generation.trainables[self.generation.features[0]],
                                           name='kappa')
 
-            # Distribution features
-            # initial_values['fixed_effect_od'] \
-            #     = tf.constant(0, shape=tf.TensorShape(self.od.initial_value.shape), dtype=self.dtype)
-
+            # Features of distribution model
             initial_values['fixed_effect_od'] \
-                = tf.cast(tf.random.uniform(shape=tf.TensorShape(self.od.initial_value.shape), minval=0.0, maxval=1.0),
-                          dtype=self.dtype)
+                = tf.constant(0, shape=tf.TensorShape(self.od.initial_value.shape), dtype=self.dtype)
+
+            # initial_values['fixed_effect_od'] \
+            #     = tf.cast(tf.random.uniform(shape=tf.TensorShape(self.od.initial_value.shape), minval=0.0, maxval=1.0),
+            #               dtype=self.dtype)
 
             self._fixed_effect_od = tf.Variable(
                 initial_value=initial_values['fixed_effect_od'],
@@ -3610,7 +3622,7 @@ def create_tvodlulpe_model_fresno(network, n_periods, historic_q, features_Z, dt
         features_Z = features_Z
     )[0]
 
-def create_tvgodlulpe_model_fresno(network, n_periods, historic_q, historic_g, features_Z, dtype = tf.float32):
+def create_tvgodlulpe_model_fresno(network, n_periods, historic_g, features_Z, historic_q = None, dtype = tf.float32):
     return create_model_fresno(
         model_key='tvgodlulpe',
         n_periods = n_periods,
@@ -3625,5 +3637,5 @@ def create_tvgodlulpe_model_fresno(network, n_periods, historic_q, historic_g, f
         generation_trainable = True,
         utility_trainable = True,
         features_Z=features_Z,
-        pretrain_generation_weights=False
+        pretrain_generation_weights=True
     )[0]
