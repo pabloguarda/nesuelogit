@@ -519,6 +519,8 @@ def plot_flow_vs_traveltime(model, period_col = None, observed_traveltime=None, 
     plot_data['sign'] = ((plot_data.predicted_flow >= 0) & (plot_data.predicted_traveltime >= 0)). \
         astype(int).map({0: 'inconsistent', 1: 'consistent'})
 
+    plot_data[hue] =  plot_data[hue].astype(str).apply(lambda x: time.strftime("%l%p", time.strptime(x, "%H")))
+
 
 
     if observed_flow is None and observed_traveltime is None:
@@ -556,7 +558,7 @@ def plot_flow_vs_traveltime(model, period_col = None, observed_traveltime=None, 
         axs[1,0].set_xlabel('observed flow')
         axs[1,0].set_ylabel('estimated flow')
 
-        sns.scatterplot(data=plot_data, x='observed_traveltime', y='predicted_traveltime', hue=hue, ax=axs[1, 1],
+        sns.scatterplot(data=plot_data, x='observed_traveltime', y='predicted_traveltime', hue=hue, ax=axs[1, 1],legend = True,
                         **kwargs)
         axs[1,1].set_xlabel('observed travel time')
         axs[1,1].set_ylabel('estimated travel time')
@@ -597,8 +599,18 @@ def plot_flow_vs_traveltime(model, period_col = None, observed_traveltime=None, 
 
         n_periods = len(plot_data[hue].unique())
 
-        legend = fig.legend(loc='upper center', bbox_to_anchor=(0.5, 0.05), ncol=n_periods)
-        legend.set_title(hour_label)
+        reorder = lambda l, nc: sum((l[i::nc] for i in range(nc)), [])
+        h, l = axs[1,1].get_legend_handles_labels()
+        ncol = 8
+
+        axs[1,1].get_legend().remove()
+        legend = fig.legend(handles = reorder(h, ncol), labels = reorder(l, ncol), loc='upper center',
+                            bbox_to_anchor=(0.5, 0.02), ncol=ncol ,handlelength=0, columnspacing=1, handletextpad=0.4,
+                            labelspacing=0.4)
+        # legend.set_bbox_to_anchor((1.05, 1))
+
+        legend.set_title(hue)
+        # legend(handlelength=0, handletextpad=0)
 
     return fig, axs
 
