@@ -206,6 +206,9 @@ class GenerationParameters(UtilityParameters):
 
         self.historic_g = historic_g
 
+        self.prelu = tf.keras.layers.PReLU(alpha_initializer='zeros',
+                                           input_shape=historic_g.shape)
+
         if self.historic_g is not None:
             self.historic_g = tf.cast(self.historic_g, self.dtype)
 
@@ -234,7 +237,8 @@ class ODParameters(pesuelogit.models.ODParameters):
 
         self._n_nodes = n_nodes
 
-        # Sparse tensor generated from OD matrix of size |N| x |N|. Cells take value 1 if there are trips, 0, otherwise.
+        # Sparse tensor generated from OD matrix of size |N| x |N|. Cell take value 1 if there are trips in O-D pair
+        # and  0, otherwise.
         self._L_sparse = tf.sparse.SparseTensor(indices=self.ods,
                                                 values=tf.ones_like(range(0, len(self.ods))),
                                                 dense_shape=(self.n_nodes, self.n_nodes))
@@ -1730,7 +1734,7 @@ class NESUELOGIT(PESUELOGIT):
 
     def mask_generation_nodes(self, g):
         """
-        Mask nodes where the number of generated trips is zero.
+        Mask nodes where the number of generated trips in the historic generation matrix is zero.
 
         :return:
         """
@@ -1756,7 +1760,8 @@ class NESUELOGIT(PESUELOGIT):
             g = self.fixed_effect_generation + tf.matmul(self.kappa, self.node_data.T)
 
         # return g
-        return tf.nn.relu(self.mask_generation_nodes(g))
+        # return tf.nn.relu(self.mask_generation_nodes(g))
+        return self.generation.prelu(g)
 
     @property
     def utility_ods(self):
@@ -2001,8 +2006,12 @@ class NESUELOGIT(PESUELOGIT):
                                           name='kappa')
 
             # Distribution features
+            # initial_values['fixed_effect_od'] \
+            #     = tf.constant(0, shape=tf.TensorShape(self.od.initial_value.shape), dtype=self.dtype)
+
             initial_values['fixed_effect_od'] \
-                = tf.constant(0, shape=tf.TensorShape(self.od.initial_value.shape), dtype=self.dtype)
+                = tf.cast(tf.random.uniform(shape=tf.TensorShape(self.od.initial_value.shape), minval=0.0, maxval=1.0),
+                          dtype=self.dtype)
 
             self._fixed_effect_od = tf.Variable(
                 initial_value=initial_values['fixed_effect_od'],
@@ -2011,6 +2020,7 @@ class NESUELOGIT(PESUELOGIT):
                 name='fixed_effect_distribution',
                 dtype=self.dtype)
 
+            # Fixed effect origin is not identifiable under current model specification
             initial_values['fixed_effect_origin'] \
                 = tf.constant(0, shape=tf.TensorShape((self.n_periods, len(self.network.nodes))), dtype=self.dtype)
 
@@ -3293,7 +3303,7 @@ def create_mlp_tntp(network, homogenous = True, diagonal = False, adjacency_cons
                                                  kernel_constraint=tf.keras.constraints.NonNeg(),
                                                  link_specific = link_specific
                                                  ),
-               alpha_relu = 0.1,
+               alpha_relu = 0,
                depth=1,
                dtype=dtype)
 
@@ -3614,5 +3624,6 @@ def create_tvgodlulpe_model_fresno(network, n_periods, historic_q, historic_g, f
         generation = True,
         generation_trainable = True,
         utility_trainable = True,
-        features_Z=features_Z
+        features_Z=features_Z,
+        pretrain_generation_weights=False
     )[0]
