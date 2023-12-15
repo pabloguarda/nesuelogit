@@ -997,7 +997,8 @@ def compute_total_trips_models(models, period_feature, period_keys):
     return total_trips_by_hour_models
 
 
-def plot_total_trips_models(models, period_feature, period_keys, historic_od: np.array = None, **kwargs):
+def plot_total_trips_models(models, period_feature, period_keys, historic_od: np.array = None, rotation_xticks = 0,
+                            **kwargs):
 
     total_trips_by_hour_models = compute_total_trips_models(models=models, period_feature=period_feature,
                                                             period_keys=period_keys)
@@ -1024,6 +1025,7 @@ def plot_total_trips_models(models, period_feature, period_keys, historic_od: np
 
     # plt.legend(loc='lower left')
     plt.legend(loc='lower right', title = 'model')
+    plt.xticks(rotation=rotation_xticks)
 
     return total_trips_by_hour_models
 
