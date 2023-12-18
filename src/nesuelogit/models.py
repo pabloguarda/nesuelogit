@@ -235,6 +235,8 @@ class ODParameters(pesuelogit.models.ODParameters):
 
         self.ods = ods
 
+        self.o, self.d = np.array(self.ods).T
+
         self._n_nodes = n_nodes
 
         # Sparse tensor generated from OD matrix of size |N| x |N|. Cell take value 1 if there are trips in O-D pair
@@ -245,6 +247,19 @@ class ODParameters(pesuelogit.models.ODParameters):
 
         self._features_generation = features_generation
         self._features_distribution = features_distribution
+
+    def flat_od_from_trip_generation(self, generated_trips):
+
+        # Count the number of unique values and create a new array
+        unique_counts = np.zeros_like(self.o, dtype=int)
+
+        # Get the unique values and their counts
+        unique_values, counts = np.unique(self.o, return_counts=True)
+
+        # Fill the new array with the counts of unique values
+        unique_counts = counts[np.searchsorted(unique_values, self.o)]
+
+        return tf.experimental.numpy.take(generated_trips, self.o, axis=1).numpy()/unique_counts
 
     @property
     def historic_values_array(self):
@@ -1764,14 +1779,11 @@ class NESUELOGIT(PESUELOGIT):
 
         else:
             g = self.fixed_effect_generation + tf.matmul(self.kappa, self.node_data.T)
+            # g = self.fixed_effect_generation
 
-        # return g
-        # return tf.nn.relu(self.mask_generation_nodes(g))
         # g = tf.math.pow(self._fixed_effect_generation, 2) + tf.matmul(self.kappa, self.node_data.T)
-        #
-        # return self._fixed_effect_generation + tf.matmul(self.kappa, self.node_data.T)
-
         # return tf.nn.relu(self.mask_generation_nodes(g))
+        # return g
         return self.generation.prelu(self.mask_generation_nodes(g))
 
 
@@ -1848,12 +1860,16 @@ class NESUELOGIT(PESUELOGIT):
 
         # g = tf.stop_gradient(tf.repeat(self.g, 1, axis=1))
 
-        # TODO: review choice of axis to sum on
-        # g = tf.repeat(self.g, tf.sparse.reduce_sum(self.od.L_sparse, axis=1), axis=1)
+        # god = tf.repeat(self.g, tf.sparse.reduce_sum(self.od.L_sparse, axis=1), axis=1)
         # Number of total trips that are generated in the origin associated with each o-d pair
         god = tf.experimental.numpy.take(self.g, self.o, axis=1)
         # tf.sparse.to_dense(self.od.L_sparse)
         # q = god * self.phi
+
+        # value_to_number = {value: i for i, value in enumerate(np.unique(self.o))}
+        # # Use NumPy to map the initial array to the new array
+        # o = np.vectorize(value_to_number.get)(self.o)
+        # god = tf.experimental.numpy.take(self.g, o, axis=1)
 
         return tf.einsum("ij, ij -> ij", god , self.phi)
 
@@ -1982,9 +1998,7 @@ class NESUELOGIT(PESUELOGIT):
             # Generation features
 
             initial_values['fixed_effect_generation'] = self.generation.initial_values['fixed_effect']
-
-            # initial_values['fixed_effect_generation'] \
-            #      = self.generation.initial_values['fixed_effect'] * tf.ones((self.n_periods, len(self.od.nodes)))
+            # initial_values['fixed_effect_generation'] = self.generation.historic_g.numpy()[self.generation.historic_g.numpy()!=0][np.newaxis,:]
 
             # Link specific effect (act as an intercept)
             self._fixed_effect_generation = tf.Variable(
@@ -2022,12 +2036,12 @@ class NESUELOGIT(PESUELOGIT):
                 = tf.constant(0, shape=tf.TensorShape(self.od.initial_value.shape), dtype=self.dtype)
 
             # initial_values['fixed_effect_od'] \
-            #     = tf.cast(tf.random.uniform(shape=tf.TensorShape(self.od.initial_value.shape), minval=0.0, maxval=1.0),
+            #     = tf.cast(tf.random.uniform(shape=tf.TensorShape(self.od.initial_value.shape), minval=-1.0, maxval=1.0),
             #               dtype=self.dtype)
 
             self._fixed_effect_od = tf.Variable(
                 initial_value=initial_values['fixed_effect_od'],
-                # trainable=False,
+                # trainable=True,
                 trainable=self.generation.trainables.get('fixed_effect_od', False),
                 name='fixed_effect_distribution',
                 dtype=self.dtype)
@@ -2554,10 +2568,28 @@ class NESUELOGIT(PESUELOGIT):
                             train_loss = \
                                 self.loss_function(X=X_batch_train, Y=Y_batch_train, lambdas=loss_weights,
                                                    loss_metric=loss_metric)['loss_total']
+                        if 'generation' not in optimizers.keys():
+                            optimizers['generation'] = optimizers['learning']
 
-                        grads = tape.gradient(train_loss, trainable_variables)
+                        if optimizers['learning'].lr.numpy() == optimizers['generation'].lr.numpy():
+                            # Homogenous learning rate
+                            grads = tape.gradient(train_loss, trainable_variables)
+                            optimizers['learning'].apply_gradients(zip(grads, trainable_variables))
 
-                        optimizers['learning'].apply_gradients(zip(grads, trainable_variables))
+                        else:
+                            variables_with_base_lr = [var for var in trainable_variables
+                                                      if "fixed_effect_generation:0" not in var.name]
+
+                            variables_with_increased_lr = [var for var in trainable_variables
+                                                           if "fixed_effect_generation:0" in var.name]
+
+                            grads = tape.gradient(train_loss, variables_with_increased_lr+variables_with_base_lr)
+
+                            optimizers['learning'].apply_gradients(zip(grads[len(variables_with_increased_lr):],
+                                                                       variables_with_base_lr))
+                            optimizers['generation'].apply_gradients(zip(grads[:len(variables_with_increased_lr)],
+                                                                       variables_with_increased_lr))
+
 
                 if alternating_optimization or (epoch >= epochs['learning'] and equilibrium_stage):
 
@@ -3453,7 +3485,7 @@ def create_model_fresno(network, model_key = 'tvgodlulpe', dtype=tf.float32, n_p
                         'income': False, 'population': False, 'bus_stops': False,
                         # 'income': True, 'population': True, 'bus_stops': True,
                         'fixed_effect_origin': False, 'fixed_effect_destination': False,
-                        'fixed_effect_od': generation_trainable
+                        'fixed_effect_od': generation_trainable,
                         },
             time_varying=True,
             historic_g= historic_g,
@@ -3464,7 +3496,7 @@ def create_model_fresno(network, model_key = 'tvgodlulpe', dtype=tf.float32, n_p
     if od_parameters is None:
         od_parameters = ODParameters(key='od',
                                      initial_values= historic_q,
-                                     historic_values={10: network.q.flatten()},
+                                     historic_values={10: historic_q[0]},
                                      ods=network.ods,
                                      n_nodes = len(network.nodes),
                                      n_periods=n_periods,
@@ -3627,7 +3659,7 @@ def create_tvgodlulpe_model_fresno(network, n_periods, historic_g, features_Z, h
         model_key='tvgodlulpe',
         n_periods = n_periods,
         network = network,
-        performance_function = create_mlp_fresno(network = network,poly_order = 3, pretrain = False,
+        performance_function = create_mlp_fresno(network = network,poly_order = 4, pretrain = False,
                                                  link_specific = False, diagonal = False, homogenous = False,
                                                  dtype = dtype),
         # performance_function=create_bpr(network=network, dtype=dtype, alpha_prior=0.9327, beta_prior=4.1017),
