@@ -2244,10 +2244,33 @@ class NESUELOGIT(PESUELOGIT):
         # self._filepath_weights = f'output/models/{self.key}_{self.network.key}.h5'
         # self.save_weights(self._filepath_weights)
 
-    # def compute_relative_gap(self):
-    #
-    #     relative_gap = (
-    #             tf.norm(link_flow - self.flows, 1) / (normalizer * tf.norm(self.flows, 1))).numpy()
+    def compute_relative_gap_by_period(self, input_flow, output_flow):
+        normalizer = 1
+        if input_flow.shape[0] < output_flow.shape[0]:
+            normalizer = int(output_flow.shape[0] / input_flow.shape[0])
+
+        relative_gaps = []
+        for i in range(output_flow.shape[0]):
+            # We now use the definition of relative residual
+            relative_gap = (
+                    tf.norm(output_flow[i,:] - input_flow[i,:], 1) /
+                    (normalizer * tf.norm(input_flow[i,:], 1))).numpy()
+            relative_gaps.append(relative_gap)
+
+        return relative_gaps
+
+    def compute_relative_gap(self, input_link_flow, output_link_flow):
+
+        normalizer = 1
+        if input_link_flow.shape[0] < output_link_flow.shape[0]:
+            normalizer = int(output_link_flow.shape[0] / input_link_flow.shape[0])
+
+        # We now use the definition of relative residual
+        relative_gap = (
+                tf.norm(output_link_flow - input_link_flow, 1)
+                / (normalizer * tf.norm(input_link_flow, 1))).numpy()
+
+        return relative_gap
 
     def fit(self,
             X_train: tf.Tensor,
@@ -2449,13 +2472,8 @@ class NESUELOGIT(PESUELOGIT):
                 # relative_x = float(np.nanmean(np.abs(tf.divide(link_flow,self.flows) - 1)))
 
                 if epoch >= 0:
-                    normalizer = 1
-                    if self.flows.shape[0] < output_link_flow.shape[0]:
-                        normalizer = int(output_link_flow.shape[0] / self.flows.shape[0])
-
-                    # We now use the definition of relative residual
-                    relative_gap = (
-                            tf.norm(output_link_flow - self.flows, 1) / (normalizer * tf.norm(self.flows, 1))).numpy()
+                    relative_gap = self.compute_relative_gap(input_link_flow = self.flows,
+                                                             output_link_flow = output_link_flow)
                     relative_gaps.append(relative_gap)
 
                 # print(f"{i}: loss={loss.numpy():0.4g}, theta = {model.theta.numpy()}")
@@ -3626,10 +3644,10 @@ def create_tvodlulpe_model_fresno(network, n_periods, historic_q, features_Z, dt
     return create_model_fresno(
         model_key = 'tvodlulpe',
         n_periods= n_periods, network = network,
-        # performance_function = create_bpr(network = network, dtype = dtype, alpha_prior = 0.9327, beta_prior = 4.1017),
-        performance_function=create_mlp_fresno(network=network, poly_order=4, pretrain=False,
-                                               link_specific=False, diagonal=False, homogenous=False,
-                                               dtype=dtype),
+        performance_function = create_bpr(network = network, dtype = dtype, alpha_prior = 0.9327, beta_prior = 4.1017),
+        # performance_function=create_mlp_fresno(network=network, poly_order=4, pretrain=False,
+        #                                        link_specific=False, diagonal=False, homogenous=False,
+        #                                        dtype=dtype),
         od_parameters = ODParameters(key='od',
                                      #initial_values= generation_factors.values[:,np.newaxis]*tntp_network.q.flatten(),
                                      initial_values = tf.stack(historic_q),
