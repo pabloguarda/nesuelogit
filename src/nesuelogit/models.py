@@ -14,7 +14,7 @@ from typing import Dict, List, Tuple, Union
 import pesuelogit
 from nesuelogit.metrics import error, mse, sse, rmse, nrmse, nmse, btcg_mse, mnrmse, mdape, mape, r2_score, zscore, \
     z2score
-from nesuelogit.utils import timeit
+from nesuelogit.utils import timeit, flat_od_from_generated_trips
 from pesuelogit.models import PESUELOGIT, normalize_od, compute_rr
 
 import tensorflow as tf
@@ -218,7 +218,6 @@ class GenerationParameters(UtilityParameters):
     def pretrain_generation_weights(self):
         return self._pretrain_generation_weights
 
-
 class ODParameters(pesuelogit.models.ODParameters):
     """ Support OD with multiple periods """
 
@@ -248,18 +247,9 @@ class ODParameters(pesuelogit.models.ODParameters):
         self._features_generation = features_generation
         self._features_distribution = features_distribution
 
-    def flat_od_from_trip_generation(self, generated_trips):
+    def flat_od_from_generated_trips(self, generated_trips):
 
-        # Count the number of unique values and create a new array
-        unique_counts = np.zeros_like(self.o, dtype=int)
-
-        # Get the unique values and their counts
-        unique_values, counts = np.unique(self.o, return_counts=True)
-
-        # Fill the new array with the counts of unique values
-        unique_counts = counts[np.searchsorted(unique_values, self.o)]
-
-        return tf.experimental.numpy.take(generated_trips, self.o, axis=1).numpy()/unique_counts
+        return flat_od_from_generated_trips(ods = self.ods, generated_trips = generated_trips)
 
     @property
     def historic_values_array(self):
