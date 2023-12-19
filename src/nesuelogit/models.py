@@ -2514,7 +2514,7 @@ class NESUELOGIT(PESUELOGIT):
                 print(  # f"train_loss bpr={float(train_loss['loss_bpr'].numpy()):0.2g}, "
                     # f"val_loss bpr={float(val_loss['loss_bpr'].numpy()):0.2g}, "
                     # f"theta = {np.round(np.unique(self.theta.numpy(),axis =0),3)}, "
-                    f"theta = {np.round(np.mean(self.theta.numpy(), axis=0), 3)}, "
+                    f"avg theta = {np.round(np.mean(self.theta.numpy(), axis=0), 3)}, "
                     f"avg rr = {np.array(compute_rr(self.get_parameters_estimates().to_dict(orient='records')[0])):0.2f}, "
                     # f"psc_factor = {self.psc_factor.numpy()}, "
                     f"avg theta fixed effect = {np.mean(self.fixed_effect):0.2g}, "
@@ -3466,7 +3466,7 @@ def create_model_fresno(network, model_key = 'tvgodlulpe', dtype=tf.float32, n_p
                 'incidents': -4.5368, 'bus_stops': 0, 'intersections': -3.8788,
                 'psc_factor': 0,
                 'fixed_effect': np.zeros_like(network.links)},
-            signs={'tt': '-', 'median_inc': '+', 'incidents': '-', #, 'tt_sd': '-'
+            signs={'tt': '-', 'median_inc': '+', 'incidents': '-', 'tt_sd': '-',
                    'bus_stops': '-', 'intersections': '-'},
             trainables={'psc_factor': False, 'fixed_effect': utility_trainable,
                         'tt': utility_trainable, 'tt_sd': utility_trainable, 'intersections': utility_trainable,
@@ -3490,8 +3490,8 @@ def create_model_fresno(network, model_key = 'tvgodlulpe', dtype=tf.float32, n_p
                             },
             signs={'income': '+', 'population': '+', 'bus_stops': '-'},
             trainables={'fixed_effect': generation_trainable,
-                        'income': False, 'population': False, 'bus_stops': False,
-                        # 'income': True, 'population': True, 'bus_stops': True,
+                        # 'income': False, 'population': False, 'bus_stops': False,
+                        'income': generation_trainable, 'population': generation_trainable, 'bus_stops': generation_trainable,
                         'fixed_effect_origin': False, 'fixed_effect_destination': False,
                         'fixed_effect_od': generation_trainable,
                         },
@@ -3667,7 +3667,7 @@ def create_tvgodlulpe_model_fresno(network, n_periods, historic_g, features_Z, h
         model_key='tvgodlulpe',
         n_periods = n_periods,
         network = network,
-        performance_function = create_mlp_fresno(network = network,poly_order = 4, pretrain = False,
+        performance_function = create_mlp_fresno(network = network,poly_order = 3, pretrain = False,
                                                  link_specific = False, diagonal = False, homogenous = False,
                                                  dtype = dtype),
         # performance_function=create_bpr(network=network, dtype=dtype, alpha_prior=0.9327, beta_prior=4.1017),
