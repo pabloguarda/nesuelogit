@@ -491,7 +491,7 @@ def plot_observed_flow_vs_traveltime(model, period_col = None, observed_travelti
     return fig, ax
 
 def plot_flow_vs_traveltime(model, period_col = None, observed_traveltime=None, observed_flow=None,
-                            hour_label = False, all_metrics = False, only_observed = False, **kwargs):
+                            hour_label = False, all_metrics = False, only_observed = False, ampm_format = True, **kwargs):
 
     if only_observed:
         return plot_observed_flow_vs_traveltime(model = model, period_col = period_col,
@@ -519,9 +519,8 @@ def plot_flow_vs_traveltime(model, period_col = None, observed_traveltime=None, 
     plot_data['sign'] = ((plot_data.predicted_flow >= 0) & (plot_data.predicted_traveltime >= 0)). \
         astype(int).map({0: 'inconsistent', 1: 'consistent'})
 
-    plot_data[hue] =  plot_data[hue].astype(str).apply(lambda x: time.strftime("%l%p", time.strptime(x, "%H")))
-
-
+    if ampm_format:
+        plot_data[hue] = plot_data[hue].astype(str).apply(lambda x: time.strftime("%l%p", time.strptime(x, "%H")))
 
     if observed_flow is None and observed_traveltime is None:
 
@@ -1065,7 +1064,10 @@ def plot_utility_parameters_periods(model, period_keys, period_feature, include_
     return theta_df
 
 def plot_congestion_maps(model, model_df: pd.DataFrame, gdf: gpd.GeoDataFrame, features: List[str], benchmark_df,
-                         cmap = 'viridis'):
+                         cmap = 'viridis', benchmark_model = None):
+
+    if benchmark_model is None:
+        benchmark_model = 'regression_kriging'
 
     # Train benchmark model
     X, y = get_tensors_by_year(benchmark_df, features_Z=features, links_keys=benchmark_df.link_key.drop_duplicates())
@@ -1085,7 +1087,7 @@ def plot_congestion_maps(model, model_df: pd.DataFrame, gdf: gpd.GeoDataFrame, f
                                                                       y_val= y_val[0][:, 0].numpy(),
                                                                       coordinates_train=gdf[['X', 'Y']].values,
                                                                       coordinates_val=gdf[['X', 'Y']].values,
-                                                                      models='regression_kriging'
+                                                                      models=[benchmark_model]
                                                                       )
 
     # Prediction traffic flow
@@ -1095,14 +1097,14 @@ def plot_congestion_maps(model, model_df: pd.DataFrame, gdf: gpd.GeoDataFrame, f
                                                                 y_val=y_val[0][:, 1].numpy(),
                                                                 coordinates_train=gdf[['X', 'Y']].values,
                                                                 coordinates_val=gdf[['X', 'Y']].values,
-                                                                models='regression_kriging'
+                                                                models=[benchmark_model]
                                                                 )
 
     benchmark_df = benchmark_df[benchmark_df.year == 2020]. \
-        assign(pred_traveltime_kriging=list(predictions_traveltime_baseline.values())[0],
-               pred_flow_kriging=list(predictions_flow_baseline.values())[0])
+        assign(pred_traveltime_benchmark=list(predictions_traveltime_baseline.values())[0],
+               pred_flow_benchmark=list(predictions_flow_baseline.values())[0])
 
-    benchmark_df['pred_speed_kriging'] = benchmark_df.eval('length/pred_traveltime_kriging')*60 #Map to speed per hour
+    benchmark_df['pred_speed_benchmark'] = benchmark_df.eval('length/pred_traveltime_benchmark')*60 #Map to speed per hour
 
     # Prepare model dataset
     X, y = get_tensors_by_year(model_df, features_Z=features, links_keys=gdf.link_key)
@@ -1133,7 +1135,7 @@ def plot_congestion_maps(model, model_df: pd.DataFrame, gdf: gpd.GeoDataFrame, f
     plot_df['capacity'] = np.where(plot_df['capacity [veh]'] == float('inf'), float('nan'), plot_df['capacity [veh]'])
     plot_df['pred_flow_ratio'] = plot_df.eval('pred_flow/capacity')
     plot_df['obs_flow_ratio'] = plot_df.eval('obs_flow/capacity')
-    plot_df['pred_flow_ratio_kriging'] = plot_df.eval('pred_flow_kriging/capacity')
+    plot_df['pred_flow_ratio_benchmark'] = plot_df.eval('pred_flow_benchmark/capacity')
     
     plot_df.loc[plot_df.speed_max == 0, 'speed_max'] = plot_df[plot_df.speed_max != 0].speed_max.mean()
 
@@ -1143,22 +1145,22 @@ def plot_congestion_maps(model, model_df: pd.DataFrame, gdf: gpd.GeoDataFrame, f
     plot_df['pred_speed_ratio'] = plot_df.eval('pred_speed/speed_max')
 
     # Post-processing to ensure that predictions from benchmark are within reasonable range
-    plot_df['pred_speed_ratio_kriging'] = plot_df['pred_speed_kriging'] / plot_df['speed_max']
-    # plot_df['pred_speed_ratio_kriging'] = plot_df['pred_speed_ratio_kriging'].clip(0, plot_df['obs_speed_ratio'].max())
+    plot_df['pred_speed_ratio_benchmark'] = plot_df['pred_speed_benchmark'] / plot_df['speed_max']
+    # plot_df['pred_speed_ratio_benchmark'] = plot_df['pred_speed_ratio_benchmark'].clip(0, plot_df['obs_speed_ratio'].max())
 
     # To show as percentage
     plot_df['obs_speed_ratio'] = 100*plot_df['obs_speed_ratio']
     plot_df['pred_speed_ratio'] = 100 * plot_df['pred_speed_ratio']
-    plot_df['pred_speed_ratio_kriging'] = 100 * plot_df['pred_speed_ratio_kriging']
+    plot_df['pred_speed_ratio_benchmark'] = 100 * plot_df['pred_speed_ratio_benchmark']
 
     plot_df['obs_flow_ratio'] = 100*plot_df['obs_flow_ratio']
     plot_df['pred_flow_ratio'] = 100 * plot_df['pred_flow_ratio']
-    plot_df['pred_flow_ratio_kriging'] = 100 * plot_df['pred_flow_ratio_kriging']
+    plot_df['pred_flow_ratio_benchmark'] = 100 * plot_df['pred_flow_ratio_benchmark']
 
     # Plot of Speed prediction
     # classifier_ = Natural_Breaks(data_values, k=5)
     num_classes = 4
-    # data_values = plot_df[['obs_speed_ratio', 'pred_speed_ratio','pred_speed_ratio_kriging']].dropna().values.flatten()
+    # data_values = plot_df[['obs_speed_ratio', 'pred_speed_ratio','pred_speed_ratio_benchmark']].dropna().values.flatten()
     # data_values = plot_df[['obs_speed_ratio']].dropna().values.flatten()
     # min_val, max_val = min(data_values), max(data_values)
     min_val, max_val = 0, 100
@@ -1185,6 +1187,7 @@ def plot_congestion_maps(model, model_df: pd.DataFrame, gdf: gpd.GeoDataFrame, f
     plot_df.plot(ax=axs[0], color = 'gray')
 
     ctx.add_basemap(source=ctx.providers.OpenStreetMap.Mapnik, ax=axs[0])
+    axs[0].set_title('network')
 
     plot_df[plot_df['obs_speed_ratio']>0].plot(column='obs_speed_ratio', scheme=scheme, cmap=cmap,  ax=axs[1],
                  classification_kwds={'bins': breaks}, legend=show_legend, legend_kwds = {"fmt": "{:.0f}%"})
@@ -1194,10 +1197,10 @@ def plot_congestion_maps(model, model_df: pd.DataFrame, gdf: gpd.GeoDataFrame, f
                  classification_kwds={'bins': breaks}, legend=show_legend, legend_kwds = {"fmt": "{:.0f}%"})
     axs[2].set_title('our model')
 
-    plot_df[(plot_df['pred_speed_ratio_kriging']>0)].plot(column='pred_speed_ratio_kriging',
+    plot_df[(plot_df['pred_speed_ratio_benchmark']>0)].plot(column='pred_speed_ratio_benchmark',
                                                           scheme=scheme, cmap=cmap, ax=axs[3],
                  classification_kwds={'bins': breaks}, legend=True, legend_kwds = {"fmt": "{:.0f}%"})
-    axs[3].set_title('best benchmark')
+    axs[3].set_title('benchmark model')
 
     for ax in axs.flat:
         ax.set_xticks([])
@@ -1215,9 +1218,10 @@ def plot_congestion_maps(model, model_df: pd.DataFrame, gdf: gpd.GeoDataFrame, f
     axs[3].legend(handles=handles, labels = labels, loc='upper right', bbox_to_anchor=(2.35, 0.6))
 
     fig_speed.subplots_adjust(wspace=0, hspace=0)
-    plt.suptitle('Speed ratio')
+    plt.suptitle('Ratio between predicted and maximum speed', x=0.4, y=0.97)
     # plt.show()
     # fig_speed.text(0.5, 0.95, 'Speed ratio', ha='center', fontsize=16)
+
 
     plt.close()
 
@@ -1231,6 +1235,7 @@ def plot_congestion_maps(model, model_df: pd.DataFrame, gdf: gpd.GeoDataFrame, f
     plot_df.plot(ax=axs[0], color = 'gray')
 
     ctx.add_basemap(source=ctx.providers.OpenStreetMap.Mapnik, ax=axs[0])
+    axs[0].set_title('network')
 
     plot_df[(plot_df['obs_flow_ratio']>0)].plot(column='obs_flow_ratio', scheme=scheme, cmap=cmap, ax=axs[1],
                  classification_kwds={'bins': breaks}, legend=show_legend, legend_kwds = {"fmt": "{:.0f}%"})
@@ -1240,9 +1245,10 @@ def plot_congestion_maps(model, model_df: pd.DataFrame, gdf: gpd.GeoDataFrame, f
                  classification_kwds={'bins': breaks}, legend=show_legend, legend_kwds = {"fmt": "{:.0f}%"})
     axs[2].set_title('our model')
 
-    plot_df[(plot_df['pred_flow_ratio_kriging']>0)].plot(column='pred_flow_ratio_kriging', scheme=scheme, cmap=cmap, ax=axs[3],
-                 classification_kwds={'bins': breaks}, legend=True, legend_kwds = {"fmt": "{:.0f}%"})
-    axs[3].set_title('best benchmark')
+    plot_df[(plot_df['pred_flow_ratio_benchmark']>0)].plot(
+        column='pred_flow_ratio_benchmark', scheme=scheme, cmap=cmap, ax=axs[3],
+        classification_kwds={'bins': breaks}, legend=True, legend_kwds = {"fmt": "{:.0f}%"})
+    axs[3].set_title('benchmark model')
 
     for ax in axs.flat:
         ax.set_xticks([])
@@ -1264,8 +1270,7 @@ def plot_congestion_maps(model, model_df: pd.DataFrame, gdf: gpd.GeoDataFrame, f
 
     fig_flow.subplots_adjust(wspace=0, hspace=0)
     # fig_flow.text(0.5, 0.95, 'Flow ratio', ha='center', fontsize=16)
-    plt.suptitle('Flow ratio')
-
+    plt.suptitle('Ratio between predicted  and maximum flow', x=0.4, y=0.97)
 
     plt.close()
 
