@@ -1988,7 +1988,7 @@ class NESUELOGIT(PESUELOGIT):
             # Generation features
 
             initial_values['fixed_effect_generation'] = self.generation.initial_values['fixed_effect']
-            # initial_values['fixed_effect_generation'] = self.generation.historic_g.numpy()[self.generation.historic_g.numpy()!=0][np.newaxis,:]
+            # initial_values['fixed_effect_generation'] = self.generation.reference_g.numpy()[self.generation.reference_g.numpy()!=0][np.newaxis,:]
 
             # Link specific effect (act as an intercept)
             self._fixed_effect_generation = tf.Variable(
@@ -2730,8 +2730,8 @@ def create_inference_model(reference_model, creation_method, **kwargs):
     if not kwargs.get('n_periods', False):
         kwargs['n_periods'] = reference_model.n_periods
 
-    if not kwargs.get('historic_g', False):
-        kwargs['historic_g'] = reference_model.generation.historic_g
+    if not kwargs.get('reference_g', False):
+        kwargs['reference_g'] = reference_model.generation.historic_g
 
     if not kwargs.get('network', False):
         kwargs['network'] = reference_model.network
@@ -3144,6 +3144,8 @@ def compute_baseline_predictions(X_train: np.ndarray,
         """
     _models = ['historical_mean', 'ordinary_kriging', 'regression_kriging', 'linear_regression']
 
+    assert all(element in _models for element in models), 'some of the selected models are not supported'
+
     if models is None:
         models = _models
 
@@ -3485,7 +3487,7 @@ def create_model_fresno(network, model_key = 'tvgodlulpe', dtype=tf.float32, n_p
             features_Z=['population', 'income', 'bus_stops'],
             keys=['fixed_effect_od', 'fixed_effect_origin', 'fixed_effect_destination'],
             initial_values={'income': 0, 'population': 0, 'bus_stops': 0,
-                            # 'fixed_effect': historic_g[0]
+                            # 'fixed_effect': reference_g[0]
                             'fixed_effect': historic_g
                             },
             signs={'income': '+', 'population': '+', 'bus_stops': '-'},
@@ -3504,7 +3506,7 @@ def create_model_fresno(network, model_key = 'tvgodlulpe', dtype=tf.float32, n_p
     if od_parameters is None:
         od_parameters = ODParameters(key='od',
                                      initial_values= historic_q,
-                                     historic_values={10: historic_q[0]},
+                                     # historic_values={10: reference_q[0]},
                                      ods=network.ods,
                                      n_nodes = len(network.nodes),
                                      n_periods=n_periods,
@@ -3526,7 +3528,7 @@ def create_model_fresno(network, model_key = 'tvgodlulpe', dtype=tf.float32, n_p
     return model, {'utility_parameters': utility_parameters, 'generation_parameters': generation_parameters,
                    'od_parameters': od_parameters, 'performance_function': performance_function}
 
-def create_suelogit(network, n_periods, historic_q, features_Z, dtype = tf.float32):
+def create_suelogit(network, n_periods, reference_q, features_Z, dtype = tf.float32):
     return create_model_tntp(network=network,
                       model_key='suelogit',
                       n_periods=n_periods,
@@ -3547,7 +3549,7 @@ def create_suelogit(network, n_periods, historic_q, features_Z, dtype = tf.float
                                                            dtype=dtype
                                                            ),
                       od_parameters=ODParameters(key='od',
-                                                 initial_values=historic_q,
+                                                 initial_values=reference_q,
                                                  ods=network.ods,
                                                  n_nodes=len(network.nodes),
                                                  n_periods=n_periods,
@@ -3555,7 +3557,7 @@ def create_suelogit(network, n_periods, historic_q, features_Z, dtype = tf.float
                                                  trainable=False),
                       generation=False)
 
-def create_tvodlulpe_model_tntp(network, n_periods, historic_g, historic_q, features_Z, dtype = tf.float32):
+def create_tvodlulpe_model_tntp(network, n_periods, historic_q, features_Z, historic_g = None, dtype = tf.float32):
 
     return create_model_tntp(
         model_key='tvodlulpe',
@@ -3598,11 +3600,15 @@ def create_tvodlulpe_model_tntp(network, n_periods, historic_g, historic_q, feat
         utility=True,
     )[0]
 
-def create_tvgodlulpe_model_tntp(network, n_periods, historic_g, historic_q, features_Z, dtype = tf.float32):
+def create_tvgodlulpe_model_tntp(network, n_periods, reference_g, features_Z, reference_q = None, dtype = tf.float32):
+
+    if reference_q is None:
+        reference_q = flat_od_from_generated_trips(generated_trips=reference_g, ods = network.ods)
+
     return create_model_tntp(
         model_key = 'tvgodlulpe',
         n_periods= n_periods, network = network,
-        historic_g= historic_g,
+        historic_g= reference_g,
         utility_parameters = UtilityParameters(features_Y=['tt'],
                                                features_Z=features_Z,
                                                initial_values={
@@ -3628,8 +3634,8 @@ def create_tvgodlulpe_model_tntp(network, n_periods, historic_g, historic_q, fea
                                                dtype = dtype, max_traveltime_factor=None),
         od_parameters = ODParameters(key='od',
                                      #initial_values= generation_factors.values[:,np.newaxis]*network.q.flatten(),
-                                     initial_values = tf.stack(historic_q),
-                                     historic_values={0: historic_q[0], 1:historic_q[1]},
+                                     initial_values = tf.stack(reference_q),
+                                     # historic_values={0: reference_q[0], 1:reference_q[1]},
                                      ods=network.ods,
                                      n_nodes = len(network.nodes),
                                      n_periods=n_periods,
@@ -3640,7 +3646,7 @@ def create_tvgodlulpe_model_tntp(network, n_periods, historic_g, historic_q, fea
 
     )[0]
 
-def create_tvodlulpe_model_fresno(network, n_periods, historic_q, features_Z, dtype = tf.float32):
+def create_tvodlulpe_model_fresno(network, n_periods, reference_q, features_Z, dtype = tf.float32):
     return create_model_fresno(
         model_key = 'tvodlulpe',
         n_periods= n_periods, network = network,
@@ -3650,8 +3656,8 @@ def create_tvodlulpe_model_fresno(network, n_periods, historic_q, features_Z, dt
         #                                        dtype=dtype),
         od_parameters = ODParameters(key='od',
                                      #initial_values= generation_factors.values[:,np.newaxis]*tntp_network.q.flatten(),
-                                     initial_values = tf.stack(historic_q),
-                                     historic_values={10: historic_q[0].flatten()},
+                                     initial_values = tf.stack(reference_q),
+                                     historic_values={10: reference_q[0].flatten()},
                                      ods=network.ods,
                                      n_nodes = len(network.nodes),
                                      n_periods=n_periods,
@@ -3662,7 +3668,11 @@ def create_tvodlulpe_model_fresno(network, n_periods, historic_q, features_Z, dt
         features_Z = features_Z
     )[0]
 
-def create_tvgodlulpe_model_fresno(network, n_periods, historic_g, features_Z, historic_q = None, dtype = tf.float32):
+def create_tvgodlulpe_model_fresno(network, n_periods, reference_g, features_Z, reference_q = None, dtype = tf.float32):
+
+    if reference_q is None:
+        reference_q = flat_od_from_generated_trips(generated_trips=reference_g, ods = network.ods)
+
     return create_model_fresno(
         model_key='tvgodlulpe',
         n_periods = n_periods,
@@ -3671,8 +3681,8 @@ def create_tvgodlulpe_model_fresno(network, n_periods, historic_g, features_Z, h
                                                  link_specific = False, diagonal = False, homogenous = False,
                                                  dtype = dtype),
         # performance_function=create_bpr(network=network, dtype=dtype, alpha_prior=0.9327, beta_prior=4.1017),
-        historic_g= historic_g,
-        historic_q = historic_q,
+        historic_g= reference_g,
+        historic_q = reference_q,
         generation = True,
         generation_trainable = True,
         utility_trainable = True,
