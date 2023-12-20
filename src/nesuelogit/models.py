@@ -2442,7 +2442,7 @@ class NESUELOGIT(PESUELOGIT):
             with pd.option_context('display.float_format', '{:0.2g}'.format):
                 print('\n')
                 print(compute_benchmark_metrics(
-                    metrics={metric_name: evaluation_metric, 'mse': mse, 'mape': mape, 'r2': r2_score},
+                    metrics={metric_name: evaluation_metric, 'mse': mse, 'mape': mape, 'mdape': mdape, 'r2': r2_score},
                     Y_ref=Y_train, Y=Y_val))
 
         # Training loop
@@ -2885,7 +2885,7 @@ def train_kfold(model: NESUELOGIT,
 
         for X_cur, Y_cur, dataset_label in [(X_train, Y_train, 'training'), (X_val, Y_val, 'validation')]:
             cur_metrics_df = model.compute_loss_metrics(
-                metrics={metric_name: evaluation_metric, 'mse': mse, 'mape': mape, 'r2': r2_score},
+                metrics={metric_name: evaluation_metric, 'mse': mse, 'mape': mape, 'mdape': mdape, 'r2': r2_score},
                                                         X=X_cur, Y=Y_cur).assign(dataset=dataset_label)
 
             metrics_df = pd.concat([metrics_df, cur_metrics_df.assign(fold=i, stage='initial')])
@@ -2918,7 +2918,7 @@ def train_kfold(model: NESUELOGIT,
 
         for X_cur, Y_cur, dataset_label in [(X_train, Y_train, 'training'), (X_val, Y_val, 'validation')]:
             cur_metrics_df = model.compute_loss_metrics(
-                metrics={metric_name: evaluation_metric, 'mse': mse, 'mape': mape, 'r2': r2_score},
+                metrics={metric_name: evaluation_metric, 'mse': mse, 'mape': mape, 'mdape': mdape, 'r2': r2_score},
                                                         X=X_cur, Y=Y_cur).assign(dataset=dataset_label)
 
             metrics_df = pd.concat([metrics_df, cur_metrics_df.assign(fold=i, stage='final')])
@@ -2926,13 +2926,15 @@ def train_kfold(model: NESUELOGIT,
         # Add benchmark that is set as the average values of the observed measurements in the training set
         metrics_df = pd.concat([metrics_df,
                                 compute_benchmark_metrics(
-                                    metrics={metric_name: evaluation_metric, 'mse': mse, 'mape': mape, 'r2': r2_score},
+                                    metrics={metric_name: evaluation_metric,
+                                             'mse': mse, 'mape': mape, 'mdape': mdape, 'r2': r2_score},
                                                           Y_ref=Y_train, Y=Y_train).assign(dataset='training',
                                                                                            fold=i,
                                                                                            stage='historical mean')])
         metrics_df = pd.concat([metrics_df,
                                 compute_benchmark_metrics(
-                                    metrics={metric_name: evaluation_metric, 'mse': mse, 'mape': mape, 'r2': r2_score},
+                                    metrics={metric_name: evaluation_metric,
+                                             'mse': mse, 'mape': mape, 'mdape': mdape, 'r2': r2_score},
                                                           Y_ref=Y_train, Y=Y_val).assign(dataset='validation',
                                                                                          fold=i,
                                                                                          stage='historical mean')])
@@ -3539,35 +3541,29 @@ def create_model_fresno(network, model_key = 'tvgodlulpe', dtype=tf.float32, n_p
     return model, {'utility_parameters': utility_parameters, 'generation_parameters': generation_parameters,
                    'od_parameters': od_parameters, 'performance_function': performance_function}
 
-def create_suelogit(network, n_periods, reference_q, features_Z, dtype = tf.float32):
+def create_suelogit(network, n_periods, reference_q, features_Z, utility_parameters = None, dtype = tf.float32):
+
     return create_model_tntp(network=network,
-                      model_key='suelogit',
-                      n_periods=n_periods,
-                      performance_function=BPR(keys=['alpha', 'beta'],
-                                               initial_values={'alpha': 0.15, 'beta': 4},
-                                               trainables={'alpha': True, 'beta': True},
-                                               capacities=[link.bpr.k for link in network.links],
-                                               free_flow_traveltimes=[link.bpr.tf for link in network.links],
-                                               dtype=dtype
-                                               ),
-                      utility_parameters=UtilityParameters(features_Y=['tt'],
-                                                           features_Z=features_Z,
-                                                           initial_values={'tt': -1, 'tt_sd': -1.3, 's': -3,
-                                                                           'psc_factor': 0,
-                                                                           'fixed_effect': np.zeros_like(
-                                                                               network.links)},
-                                                           time_varying=True,
-                                                           dtype=dtype
-                                                           ),
-                      od_parameters=ODParameters(key='od',
-                                                 initial_values=reference_q,
-                                                 ods=network.ods,
-                                                 n_nodes=len(network.nodes),
-                                                 n_periods=n_periods,
-                                                 time_varying=True,
-                                                 trainable=False),
-                      reference_q = reference_q,
-                      generation=False)
+                             model_key='suelogit',
+                             n_periods=n_periods,
+                             features_Z=features_Z,
+                             utility_parameters = utility_parameters,
+                             performance_function=BPR(keys=['alpha', 'beta'],
+                                                      initial_values={'alpha': 0.15, 'beta': 4},
+                                                      trainables={'alpha': True, 'beta': True},
+                                                      capacities=[link.bpr.k for link in network.links],
+                                                      free_flow_traveltimes=[link.bpr.tf for link in network.links],
+                                                      dtype=dtype
+                                                      ),
+                             od_parameters=ODParameters(key='od',
+                                                        initial_values=reference_q,
+                                                        ods=network.ods,
+                                                        n_nodes=len(network.nodes),
+                                                        n_periods=n_periods,
+                                                        time_varying=True,
+                                                        trainable=False),
+                             reference_q = reference_q,
+                             generation=False)[0]
 
 def create_tvodlulpe_model_tntp(network, n_periods, reference_q, features_Z, reference_g = None, dtype = tf.float32):
 
