@@ -199,18 +199,18 @@ class GenerationParameters(UtilityParameters):
 
     def __init__(self,
                  pretrain_generation_weights=False,
-                 historic_g=None,
+                 reference_g=None,
                  *args,
                  **kwargs):
         super().__init__(features_Y=None, *args, **kwargs)
 
-        self.historic_g = historic_g
+        self.reference_g = reference_g
 
         self.prelu = tf.keras.layers.PReLU(alpha_initializer='zeros',
-                                           input_shape=historic_g.shape)
+                                           input_shape=reference_g.shape)
 
-        if self.historic_g is not None:
-            self.historic_g = tf.cast(self.historic_g, self.dtype)
+        if self.reference_g is not None:
+            self.reference_g = tf.cast(self.reference_g, self.dtype)
 
         self._pretrain_generation_weights = pretrain_generation_weights
 
@@ -224,6 +224,7 @@ class ODParameters(pesuelogit.models.ODParameters):
     def __init__(self,
                  ods: List[Tuple],
                  n_nodes: int = None,
+                 reference_values: Dict[str, np.array] = None,
                  features_generation: List[str] = None,
                  features_distribution: List[str] = None,
                  n_periods=1,
@@ -231,6 +232,8 @@ class ODParameters(pesuelogit.models.ODParameters):
                  **kwargs):
 
         super().__init__(*args, **kwargs, n_periods=n_periods)
+
+        self.reference_values = reference_values
 
         self.ods = ods
 
@@ -252,23 +255,23 @@ class ODParameters(pesuelogit.models.ODParameters):
         return flat_od_from_generated_trips(ods = self.ods, generated_trips = generated_trips)
 
     @property
-    def historic_values_array(self):
-        # historic_od = tf.expand_dims(tf.constant(self.network.q.flatten()), axis=0)
-        # if len(list(self.historic_values.keys())) > 1:
+    def reference_values_array(self):
+        # reference_od = tf.expand_dims(tf.constant(self.network.q.flatten()), axis=0)
+        # if len(list(self.reference_values.keys())) > 1:
 
-        if isinstance(self.historic_values, dict) and self.historic_values is not None:
-            # historic_od = np.empty((self.n_periods, list(self.historic_values.values())[0].shape[0]))
-            historic_od = np.empty(self.initial_value.shape)
-            historic_od[:] = np.nan
+        if isinstance(self.reference_values, dict) and self.reference_values is not None:
+            # reference_od = np.empty((self.n_periods, list(self.reference_values.values())[0].shape[0]))
+            reference_od = np.empty(self.initial_value.shape)
+            reference_od[:] = np.nan
 
-            for period, od in self.historic_values.items():
-                historic_od[period, :] = od
+            for period, od in self.reference_values.items():
+                reference_od[period, :] = od
 
-            return historic_od
-        # return self._historic_values
+            return reference_od
+        # return self._reference_values
 
         else:
-            return self.historic_values
+            return self.reference_values
 
     @property
     def features_generation(self):
@@ -348,7 +351,7 @@ class ODParameters(pesuelogit.models.ODParameters):
         '''
         This method is used to initialize the fixed effect of the trip distribution equation
 
-        :param historic_od:
+        :param reference_od:
         :return:
         '''
 
@@ -1304,7 +1307,7 @@ class NESUELOGIT(PESUELOGIT):
 
         # if self.od.features_generation:
         #     lambdas_vals['generation'] = 1e2
-        #     loss['generation'] = mse(actual = compute_generated_trips(historic_od, ods = self.od.ods),
+        #     loss['generation'] = mse(actual = compute_generated_trips(reference_od, ods = self.od.ods),
         #                              predicted = compute_generated_trips(self.q, ods = self.od.ods))
 
         # Equilibrium loss
@@ -1314,19 +1317,19 @@ class NESUELOGIT(PESUELOGIT):
                                                     output_flow=self.output_flow(),
                                                     observed_flow=self._observed_flow)
 
-        historic_od = self.q.numpy()
-        historic_od[:] = np.nan
+        reference_od = self.q.numpy()
+        reference_od[:] = np.nan
 
-        # if lambdas_vals['od'] > 0 and self.od.historic_values is not None and self.q is not None:
-        if self.od.historic_values is not None and self.q is not None:
-            historic_od = tf.cast(self.od.historic_values_array, self.dtype)
-            # historic_od = tf.cast(tf.stack(list(self.od.historic_values.values())), self.dtype)
+        # if lambdas_vals['od'] > 0 and self.od.reference_values is not None and self.q is not None:
+        if self.od.reference_values is not None and self.q is not None:
+            reference_od = tf.cast(self.od.reference_values_array, self.dtype)
+            # reference_od = tf.cast(tf.stack(list(self.od.reference_values.values())), self.dtype)
 
             loss.update({
-                'od': loss_metric(actual=historic_od, predicted=self.q),
+                'od': loss_metric(actual=reference_od, predicted=self.q),
                 'ntrips': sse(actual=np.sum(self.q, axis=1),
-                              predicted=self.od.total_trips_array) / historic_od.shape[1],
-                'prop_od': loss_metric(actual=normalize_od(historic_od), predicted=normalize_od(self.q)),
+                              predicted=self.od.total_trips_array) / reference_od.shape[1],
+                'prop_od': loss_metric(actual=normalize_od(reference_od), predicted=normalize_od(self.q)),
             })
         # else:
         #     loss.update({'od': float('nan'), 'ntrips': float('nan'), 'prop_od': float('nan')})
@@ -1698,7 +1701,7 @@ class NESUELOGIT(PESUELOGIT):
 
         # y = self.od.compute_generated_trips().numpy().flatten()
 
-        y = self.generation.historic_g.numpy()
+        y = self.generation.reference_g.numpy()
 
         if one_hot_encoding:
             fixed_effect = enc.fit_transform(np.arange(0, self.node_data.shape[0])[:, np.newaxis]).toarray()
@@ -1750,10 +1753,10 @@ class NESUELOGIT(PESUELOGIT):
         :return:
         """
 
-        if self.generation.historic_g is None:
+        if self.generation.reference_g is None:
             return g
 
-        return g * tf.cast(self.generation.historic_g > 0, dtype=self.dtype)
+        return g * tf.cast(self.generation.reference_g > 0, dtype=self.dtype)
 
     @property
     def g(self):
@@ -2200,14 +2203,14 @@ class NESUELOGIT(PESUELOGIT):
         # Also update period ids values in historic values of OD and total trips dictionary
         # (#TODO: may move this code under od class)
 
-        if self.od.historic_values is not None and isinstance(self.od.historic_values, dict):
-            new_historic_values = {}
-            for period_id, od in self.od.historic_values.items():
+        if self.od.reference_values is not None and isinstance(self.od.reference_values, dict):
+            new_reference_values = {}
+            for period_id, od in self.od.reference_values.items():
                 for k, v in self.period_dict.items():
                     if k == period_id:
-                        new_historic_values[v] = od
+                        new_reference_values[v] = od
 
-            self.od.historic_values = new_historic_values
+            self.od.reference_values = new_reference_values
 
         if self.od.total_trips is not None:
 
@@ -2438,8 +2441,9 @@ class NESUELOGIT(PESUELOGIT):
                 "Benchmark metrics using historical mean in training data to make predictions in the validation set: ")
             with pd.option_context('display.float_format', '{:0.2g}'.format):
                 print('\n')
-                print(compute_benchmark_metrics(metrics={metric_name: evaluation_metric, 'mse': mse, 'r2': r2_score}, Y_ref=Y_train,
-                                                Y=Y_val))
+                print(compute_benchmark_metrics(
+                    metrics={metric_name: evaluation_metric, 'mse': mse, 'mape': mape, 'r2': r2_score},
+                    Y_ref=Y_train, Y=Y_val))
 
         # Training loop
         while not convergence:
@@ -2518,7 +2522,7 @@ class NESUELOGIT(PESUELOGIT):
                     f"avg rr = {np.array(compute_rr(self.get_parameters_estimates().to_dict(orient='records')[0])):0.2f}, "
                     # f"psc_factor = {self.psc_factor.numpy()}, "
                     f"avg theta fixed effect = {np.mean(self.fixed_effect):0.2g}, "
-                    # f"avg abs diff demand ={np.nanmean(np.abs(self.q - self.historic_od(self.q))):0.2g}, ",end = '')
+                    # f"avg abs diff demand ={np.nanmean(np.abs(self.q - self.reference_od(self.q))):0.2g}, ",end = '')
                     f"loss prop od={train_losses[-1]['loss_od']:0.2g}, "
                     # f"loss ntrips={train_losses[-1]['loss_ntrips']:0.2g}, "
                     f"total trips={np.array2string(np.round(np.sum(self.q, axis=1)), formatter={'float': lambda x: f'{x:.2e}'})}, ",
@@ -2731,7 +2735,7 @@ def create_inference_model(reference_model, creation_method, **kwargs):
         kwargs['n_periods'] = reference_model.n_periods
 
     if not kwargs.get('reference_g', False):
-        kwargs['reference_g'] = reference_model.generation.historic_g
+        kwargs['reference_g'] = reference_model.generation.reference_g
 
     if not kwargs.get('network', False):
         kwargs['network'] = reference_model.network
@@ -2880,7 +2884,8 @@ def train_kfold(model: NESUELOGIT,
                       **{**kwargs, **{'epochs': {'learning': 0, 'equilibrium': 0}}})
 
         for X_cur, Y_cur, dataset_label in [(X_train, Y_train, 'training'), (X_val, Y_val, 'validation')]:
-            cur_metrics_df = model.compute_loss_metrics(metrics={metric_name: evaluation_metric, 'mse': mse, 'r2': r2_score},
+            cur_metrics_df = model.compute_loss_metrics(
+                metrics={metric_name: evaluation_metric, 'mse': mse, 'mape': mape, 'r2': r2_score},
                                                         X=X_cur, Y=Y_cur).assign(dataset=dataset_label)
 
             metrics_df = pd.concat([metrics_df, cur_metrics_df.assign(fold=i, stage='initial')])
@@ -2912,19 +2917,22 @@ def train_kfold(model: NESUELOGIT,
                                                          'group': 'generation'})])
 
         for X_cur, Y_cur, dataset_label in [(X_train, Y_train, 'training'), (X_val, Y_val, 'validation')]:
-            cur_metrics_df = model.compute_loss_metrics(metrics={metric_name: evaluation_metric, 'mse': mse, 'r2': r2_score},
+            cur_metrics_df = model.compute_loss_metrics(
+                metrics={metric_name: evaluation_metric, 'mse': mse, 'mape': mape, 'r2': r2_score},
                                                         X=X_cur, Y=Y_cur).assign(dataset=dataset_label)
 
             metrics_df = pd.concat([metrics_df, cur_metrics_df.assign(fold=i, stage='final')])
 
         # Add benchmark that is set as the average values of the observed measurements in the training set
         metrics_df = pd.concat([metrics_df,
-                                compute_benchmark_metrics(metrics={metric_name: evaluation_metric, 'mse': mse, 'r2': r2_score},
+                                compute_benchmark_metrics(
+                                    metrics={metric_name: evaluation_metric, 'mse': mse, 'mape': mape, 'r2': r2_score},
                                                           Y_ref=Y_train, Y=Y_train).assign(dataset='training',
                                                                                            fold=i,
                                                                                            stage='historical mean')])
         metrics_df = pd.concat([metrics_df,
-                                compute_benchmark_metrics(metrics={metric_name: evaluation_metric, 'mse': mse, 'r2': r2_score},
+                                compute_benchmark_metrics(
+                                    metrics={metric_name: evaluation_metric, 'mse': mse, 'mape': mape, 'r2': r2_score},
                                                           Y_ref=Y_train, Y=Y_val).assign(dataset='validation',
                                                                                          fold=i,
                                                                                          stage='historical mean')])
@@ -3144,10 +3152,10 @@ def compute_baseline_predictions(X_train: np.ndarray,
         """
     _models = ['historical_mean', 'ordinary_kriging', 'regression_kriging', 'linear_regression']
 
-    assert all(element in _models for element in models), 'some of the selected models are not supported'
-
     if models is None:
         models = _models
+
+    assert all(element in _models for element in models), 'some of the selected models are not supported'
 
     # Get rid of values in validation set with nan observations
     train_non_nan_idxs = ~np.isnan(y_train)
@@ -3367,7 +3375,7 @@ def create_model_tntp(network, model_key = '', dtype=tf.float32, n_periods=1, fe
                       generation_parameters = None, generation: bool = True, utility: bool = False,
                       ):
 
-    if reference_q is None:
+    if reference_q is None and generation:
         reference_q = flat_od_from_generated_trips(generated_trips=reference_g, ods=network.ods)
 
     if utility_parameters is None:
@@ -3412,7 +3420,7 @@ def create_model_tntp(network, model_key = '', dtype=tf.float32, n_periods=1, fe
                 # 'fixed_effect_origin': False, 'fixed_effect_destination': True, 'fixed_effect_od': False
             },
             pretrain_generation_weights=False,
-            historic_g= reference_g,
+            reference_g= reference_g,
             dtype=dtype
         )
 
@@ -3421,8 +3429,8 @@ def create_model_tntp(network, model_key = '', dtype=tf.float32, n_periods=1, fe
                                      # initial_values=network.q.flatten(),
                                      # true_values=network.q.flatten(),
                                      initial_values = tf.stack(reference_q),
-                                     historic_values = tf.stack(reference_q),
-                                     # historic_values={0: network.q.flatten()},
+                                     reference_values = tf.stack(reference_q),
+                                     # reference_values={0: network.q.flatten()},
                                      # total_trips={0: np.sum(network.Q)},
                                      ods=network.ods,
                                      n_nodes = len(network.nodes),
@@ -3458,7 +3466,7 @@ def create_bpr(network, alpha_prior = 1, beta_prior = 1, dtype =tf.float32, max_
 
 
 def create_model_fresno(network, model_key = 'tvgodlulpe', dtype=tf.float32, n_periods=1, features_Z=None,
-                        historic_g=None, historic_q = None, performance_function=None, utility_parameters = None,
+                        reference_g=None, reference_q = None, performance_function=None, utility_parameters = None,
                         od_parameters = None, generation_parameters = None, generation = True, od_trainable = False,
                         utility_trainable = True, pretrain_generation_weights = True, generation_trainable = True):
 
@@ -3491,7 +3499,7 @@ def create_model_fresno(network, model_key = 'tvgodlulpe', dtype=tf.float32, n_p
             keys=['fixed_effect_od', 'fixed_effect_origin', 'fixed_effect_destination'],
             initial_values={'income': 0, 'population': 0, 'bus_stops': 0,
                             # 'fixed_effect': reference_g[0]
-                            'fixed_effect': historic_g
+                            'fixed_effect': reference_g
                             },
             signs={'income': '+', 'population': '+', 'bus_stops': '-'},
             trainables={'fixed_effect': generation_trainable,
@@ -3501,15 +3509,15 @@ def create_model_fresno(network, model_key = 'tvgodlulpe', dtype=tf.float32, n_p
                         'fixed_effect_od': generation_trainable,
                         },
             time_varying=True,
-            historic_g= historic_g,
+            reference_g= reference_g,
             pretrain_generation_weights=pretrain_generation_weights,
             dtype=dtype
         )
 
     if od_parameters is None:
         od_parameters = ODParameters(key='od',
-                                     initial_values= historic_q,
-                                     # historic_values={10: reference_q[0]},
+                                     initial_values= reference_q,
+                                     # reference_values={10: reference_q[0]},
                                      ods=network.ods,
                                      n_nodes = len(network.nodes),
                                      n_periods=n_periods,
@@ -3558,14 +3566,16 @@ def create_suelogit(network, n_periods, reference_q, features_Z, dtype = tf.floa
                                                  n_periods=n_periods,
                                                  time_varying=True,
                                                  trainable=False),
+                      reference_q = reference_q,
                       generation=False)
 
-def create_tvodlulpe_model_tntp(network, n_periods, historic_q, features_Z, historic_g = None, dtype = tf.float32):
+def create_tvodlulpe_model_tntp(network, n_periods, reference_q, features_Z, reference_g = None, dtype = tf.float32):
 
     return create_model_tntp(
         model_key='tvodlulpe',
         n_periods=n_periods, network=network,
-        reference_g=historic_g,
+        reference_q=reference_q,
+        reference_g=reference_g,
         performance_function=create_bpr(network=network, dtype=dtype, max_traveltime_factor=None),
         # performance_function = create_mlp_tntp(network = network, adjacency_constraint = True,
         #                                        symmetric = False, diagonal = True, homogenous = True,
@@ -3592,8 +3602,8 @@ def create_tvodlulpe_model_tntp(network, n_periods, historic_q, features_Z, hist
                                              ),
         od_parameters=ODParameters(key='od',
                                    # initial_values= generation_factors.values[:,np.newaxis]*network.q.flatten(),
-                                   initial_values=tf.stack(historic_q),
-                                   historic_values={0: historic_q[0], 1: historic_q[1]},
+                                   initial_values=tf.stack(reference_q),
+                                   reference_values={0: reference_q[0], 1: reference_q[1]},
                                    ods=network.ods,
                                    n_periods=n_periods,
                                    n_nodes=len(network.nodes),
@@ -3638,7 +3648,7 @@ def create_tvgodlulpe_model_tntp(network, n_periods, reference_g, features_Z, re
         od_parameters = ODParameters(key='od',
                                      #initial_values= generation_factors.values[:,np.newaxis]*network.q.flatten(),
                                      initial_values = tf.stack(reference_q),
-                                     # historic_values={0: reference_q[0], 1:reference_q[1]},
+                                     # reference_values={0: reference_q[0], 1:reference_q[1]},
                                      ods=network.ods,
                                      n_nodes = len(network.nodes),
                                      n_periods=n_periods,
@@ -3660,7 +3670,7 @@ def create_tvodlulpe_model_fresno(network, n_periods, reference_q, features_Z, d
         od_parameters = ODParameters(key='od',
                                      #initial_values= generation_factors.values[:,np.newaxis]*tntp_network.q.flatten(),
                                      initial_values = tf.stack(reference_q),
-                                     historic_values= tf.stack(reference_q), #{10: reference_q[0].flatten()},
+                                     reference_values= tf.stack(reference_q), #{10: reference_q[0].flatten()},
                                      ods=network.ods,
                                      n_nodes = len(network.nodes),
                                      n_periods=n_periods,
@@ -3684,8 +3694,8 @@ def create_tvgodlulpe_model_fresno(network, n_periods, reference_g, features_Z, 
                                                  link_specific = False, diagonal = False, homogenous = False,
                                                  dtype = dtype),
         # performance_function=create_bpr(network=network, dtype=dtype, alpha_prior=0.9327, beta_prior=4.1017),
-        historic_g= reference_g,
-        historic_q = reference_q,
+        reference_g= reference_g,
+        reference_q= reference_q,
         generation = True,
         generation_trainable = True,
         utility_trainable = True,
