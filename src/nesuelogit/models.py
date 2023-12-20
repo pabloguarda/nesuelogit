@@ -3362,10 +3362,13 @@ def create_mlp_tntp(network, homogenous = True, diagonal = False, adjacency_cons
                dtype=dtype)
 
 def create_model_tntp(network, model_key = '', dtype=tf.float32, n_periods=1, features_Z=None,
-                      historic_g=None, true_q = None,
+                      reference_g=None, reference_q = None,
                       performance_function=None, utility_parameters = None, od_parameters = None,
                       generation_parameters = None, generation: bool = True, utility: bool = False,
                       ):
+
+    if reference_q is None:
+        reference_q = flat_od_from_generated_trips(generated_trips=reference_g, ods=network.ods)
 
     if utility_parameters is None:
         utility_parameters = UtilityParameters(features_Y=['tt'],
@@ -3397,7 +3400,7 @@ def create_model_tntp(network, model_key = '', dtype=tf.float32, n_periods=1, fe
             # features_Z=['income', 'population'],
             initial_values={
                 # 'income': 0,
-                'fixed_effect': historic_g,
+                'fixed_effect': reference_g,
             },
             keys=['fixed_effect_od', 'fixed_effect_origin', 'fixed_effect_destination'],
             # true_values={'income': 0, 'fixed_effect': np.zeros_like(network.links)},
@@ -3409,7 +3412,7 @@ def create_model_tntp(network, model_key = '', dtype=tf.float32, n_periods=1, fe
                 # 'fixed_effect_origin': False, 'fixed_effect_destination': True, 'fixed_effect_od': False
             },
             pretrain_generation_weights=False,
-            historic_g= historic_g,
+            historic_g= reference_g,
             dtype=dtype
         )
 
@@ -3417,8 +3420,8 @@ def create_model_tntp(network, model_key = '', dtype=tf.float32, n_periods=1, fe
         od_parameters = ODParameters(key='od',
                                      # initial_values=network.q.flatten(),
                                      # true_values=network.q.flatten(),
-                                     initial_values = tf.stack(true_q),
-                                     historic_values = tf.stack(true_q),
+                                     initial_values = tf.stack(reference_q),
+                                     historic_values = tf.stack(reference_q),
                                      # historic_values={0: network.q.flatten()},
                                      # total_trips={0: np.sum(network.Q)},
                                      ods=network.ods,
@@ -3562,7 +3565,7 @@ def create_tvodlulpe_model_tntp(network, n_periods, historic_q, features_Z, hist
     return create_model_tntp(
         model_key='tvodlulpe',
         n_periods=n_periods, network=network,
-        historic_g=historic_g,
+        reference_g=historic_g,
         performance_function=create_bpr(network=network, dtype=dtype, max_traveltime_factor=None),
         # performance_function = create_mlp_tntp(network = network, adjacency_constraint = True,
         #                                        symmetric = False, diagonal = True, homogenous = True,
@@ -3608,7 +3611,7 @@ def create_tvgodlulpe_model_tntp(network, n_periods, reference_g, features_Z, re
     return create_model_tntp(
         model_key = 'tvgodlulpe',
         n_periods= n_periods, network = network,
-        historic_g= reference_g,
+        reference_g= reference_g,
         utility_parameters = UtilityParameters(features_Y=['tt'],
                                                features_Z=features_Z,
                                                initial_values={
@@ -3657,7 +3660,7 @@ def create_tvodlulpe_model_fresno(network, n_periods, reference_q, features_Z, d
         od_parameters = ODParameters(key='od',
                                      #initial_values= generation_factors.values[:,np.newaxis]*tntp_network.q.flatten(),
                                      initial_values = tf.stack(reference_q),
-                                     historic_values={10: reference_q[0].flatten()},
+                                     historic_values= tf.stack(reference_q), #{10: reference_q[0].flatten()},
                                      ods=network.ods,
                                      n_nodes = len(network.nodes),
                                      n_periods=n_periods,
