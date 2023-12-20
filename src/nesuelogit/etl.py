@@ -4,6 +4,7 @@ from isuelogit.links import Link
 from pesuelogit.networks import TransportationNetwork
 from isuelogit.factory import NetworkGenerator
 from pesuelogit.etl import get_y_tensor, get_design_tensor
+import numpy as np
 
 from typing import Dict, List, Tuple
 import tensorflow as tf
@@ -107,3 +108,72 @@ def get_tensors_by_year(df: pd.DataFrame, features_Z: List[str], links_keys: Lis
         X[year] = get_design_tensor(Z=df_year[features_Z + ['period_id']], n_links=n_links, n_timepoints=n_timepoints)
 
     return X, Y
+
+
+def data_curation(raw_data: pd.DataFrame):
+    """
+    Curation of link-level data
+    """
+
+    # Curation of travel time data
+    raw_data.loc[raw_data['speed_ref_avg'] <= 0, 'speed_ref_avg'] = float('nan')
+
+    raw_data['tt_ff'] = np.where(raw_data['link_type'] != 'LWRLK', 0, raw_data['length'] / raw_data['speed_ref_avg'])
+    raw_data.loc[(raw_data.link_type == "LWRLK") & (raw_data.speed_ref_avg == 0), 'tt_ff'] = float('nan')
+
+    raw_data['tt_avg'] = np.where(raw_data['link_type'] != 'LWRLK', 0, raw_data['length'] / raw_data['speed_hist_avg'])
+    raw_data.loc[(raw_data.link_type == "LWRLK") & (raw_data.speed_hist_avg == 0), 'tt_avg'] = float('nan')
+
+    tt_sd_adj = raw_data.groupby(['period_id', 'link_key'])[['tt_avg']].std().reset_index().rename(
+        columns={'tt_avg': 'tt_sd_adj'})
+
+    raw_data = raw_data.merge(tt_sd_adj, on=['period_id', 'link_key'])
+
+    # Replace values of free flow travel times that had nans
+    indices = (raw_data['link_type'] == 'LWRLK') & (raw_data['tt_ff'].isna())
+
+    # with travel time reported in original nework files
+    # raw_data.loc[indices, 'tt_ff'] = raw_data.loc[indices, 'tf']
+    # Or alternatively, use average free flow speed:
+    average_reference_speed = raw_data[raw_data['speed_ref_avg'] > 0]['speed_ref_avg'].mean()
+    raw_data.loc[indices, 'tt_ff'] = raw_data.loc[indices, 'length'] / average_reference_speed
+
+    # raw_data = traveltime_imputation(raw_data)
+
+    # Imputation
+
+    for feature in ['tt_ff', 'tt_avg']:
+        if feature in raw_data.columns:
+            raw_data.loc[(raw_data['link_type'] == 'LWRLK') & (raw_data[feature] == 0), feature] \
+                = raw_data.loc[(raw_data['link_type'] == 'LWRLK') & (raw_data[feature] != 0), feature].mean()
+            raw_data.loc[(raw_data['link_type'] != 'LWRLK'), feature] = 0
+
+    for feature in ['tt_sd', 'tt_sd_adj']:
+        if feature in raw_data.columns:
+            raw_data.loc[(raw_data['link_type'] == 'LWRLK') & (raw_data[feature].isna()), feature] \
+                = raw_data.loc[(raw_data['link_type'] == 'LWRLK') & (~raw_data[feature].isna()), feature].mean()
+            raw_data.loc[(raw_data['link_type'] != 'LWRLK'), feature] = 0
+
+    # raw_data.loc[(raw_data['link_type'] == 'LWRLK') & (raw_data['tt_avg'] == 0), 'tt_avg'] \
+    #     = raw_data.loc[(raw_data['link_type'] == 'LWRLK') & (raw_data['tt_avg'] != 0), 'tt_avg'].mean()
+
+    # raw_data[['tt_ff', 'tt_avg', 'tt_avg_imputed', 'link_type']]#
+
+    # Travel time average cannot be lower than free flow travel time or to have nan entries
+    indices = (raw_data['link_type'] == 'LWRLK') & (raw_data['tt_avg'] < raw_data['tt_ff'])
+    # raw_data.loc[indices,'tt_avg'] = float('nan')
+    # alternatively, we reduce the average travel times in the conflicting observations to match the free flow travel time
+    raw_data.loc[indices, 'tt_avg'] = raw_data.loc[indices, 'tt_ff']
+
+    # raw_data = impute_average_traveltime(raw_data)
+
+    # Curation of link flow data
+    raw_data.loc[raw_data['counts'] <= 0, "counts"] = np.nan
+
+    # Observed counts as used as a measure of how congested are the links, thus, they are normalized by link capacity
+    raw_data = pd.merge(raw_data,
+                        raw_data.groupby('link_key')[['counts']].max().rename(columns={'counts': 'counts_max'}),
+                        on='link_key')
+    raw_data['counts'] = raw_data['counts'] / raw_data['counts_max'] * raw_data['k']
+
+    return raw_data
