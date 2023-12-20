@@ -820,7 +820,7 @@ def plot_heatmap_demands(Qs: Dict[str, Matrix],
     return fig, ax
 
 
-def plot_top_od_flows_periods(model, period_feature, period_keys, historic_od, top_k=10, join_points = False,
+def plot_top_od_flows_periods(model, period_feature, period_keys, reference_od, top_k=10, join_points = False,
                               rotation_xticks = 0):
     """
     Plot top od pairs according to the largest number of trips reported in historic OD matrix
@@ -849,12 +849,12 @@ def plot_top_od_flows_periods(model, period_feature, period_keys, historic_od, t
 
     q_df = q_df.transpose()
 
-    if historic_od is not None:
-        q_df.insert(loc=0, column='historic_od', value=historic_od)
+    if reference_od is not None:
+        q_df.insert(loc=0, column='reference_od', value=reference_od)
 
     # top_q = q_df.loc[q_df.var(axis = 1).sort_values(ascending=False)[0:top_k].index].sort_index()
 
-    top_q = q_df.loc[q_df['historic_od'].sort_values(ascending=False)[0:top_k].index]  # .sort_index()
+    top_q = q_df.loc[q_df['reference_od'].sort_values(ascending=False)[0:top_k].index]  # .sort_index()
 
     fig, ax = plt.subplots(1,1, figsize=(5, 4), tight_layout=True)
 
@@ -866,7 +866,7 @@ def plot_top_od_flows_periods(model, period_feature, period_keys, historic_od, t
     # plt.show()
 
     # Plot total trips by hour
-    if historic_od is not None:
+    if reference_od is not None:
         total_trips_by_hour = q_df.sum(axis=0)[1:]
     else:
         total_trips_by_hour = q_df.sum(axis=0)
@@ -1008,7 +1008,7 @@ def compute_total_trips_models(models, period_feature, period_keys):
     return total_trips_by_hour_models
 
 
-def plot_total_trips_models(models, period_feature, period_keys, historic_od: np.array = None, rotation_xticks = 0,
+def plot_total_trips_models(models, period_feature, period_keys, reference_od: np.array = None, rotation_xticks = 0,
                             **kwargs):
 
     total_trips_by_hour_models = compute_total_trips_models(models=models, period_feature=period_feature,
@@ -1027,8 +1027,8 @@ def plot_total_trips_models(models, period_feature, period_keys, historic_od: np
                       # markers=['o', 'v', 's', '+'], palette=["black", "black", "black", "black"],
                       **kwargs)
 
-    if historic_od is not None:
-        g.axhline(np.sum(historic_od), linestyle='dashed', color='black', label='historic od')  #
+    if reference_od is not None:
+        g.axhline(np.sum(reference_od), linestyle='dashed', color='black', label='historic od')  #
 
     plt.ylabel('total trips', fontsize=12)
 
