@@ -54,7 +54,7 @@ def simulate_nesuelogit_data(model: NESUELOGIT,
     :param threshold_relative_gap:
     :param max_epochs:
     :param coverage:
-    :param sd_x:
+    :param sd_x:  the standard deviation relative to the true mean of traffic counts
     :param sd_t:
     :return:
     """
@@ -73,16 +73,17 @@ def simulate_nesuelogit_data(model: NESUELOGIT,
     for var in optimizer.variables():
         var.assign(tf.zeros_like(var))
 
+    # This should end in a single epoch as the relative threshold is the same than for computing equlibrium
     with block_output(show_stdout=False, show_stderr=False):
         Y_pred = model.predict(tf.cast(X, dtype = model.dtype),
                                period_dict={k: v for k, v in model.period_dict.items()},
+                               pretrain_link_flows=False,
                                loss_metric= loss_metric,
                                optimizer= optimizer,
                                batch_size=batch_size,
                                loss_weights={'equilibrium': 1},
-                               threshold_relative_gap=threshold_relative_gap,  # _RELATIVE_GAP,
-                               # epochs_print_interval=_EPOCHS_PRINT_INTERVAL,
-                               epochs=max_epochs)
+                               threshold_relative_gap=threshold_relative_gap,
+                               epochs=1)
 
     traveltimes, link_flows = tf.unstack(Y_pred, axis = -1)
 
