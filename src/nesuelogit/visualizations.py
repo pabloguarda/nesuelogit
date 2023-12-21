@@ -257,7 +257,8 @@ def plot_predictive_performance(train_losses: pd.DataFrame,
                                 show_equilibrium_stage_line = False,
                                 curves=None,
                                 prefix_metric='loss',
-                                yaxis_label='relative mse (%)',
+                                yaxis_label='relative mse',
+                                show_percentage_units = False,
                                 **kwargs):
     # fig, ax = plt.subplots(figsize = (5,4))
 
@@ -409,6 +410,11 @@ def plot_predictive_performance(train_losses: pd.DataFrame,
 
     else:
         plt.legend(loc="upper right", bbox_to_anchor=(1, 1), bbox_transform=ax.transAxes, prop={'size': 10})
+
+    if show_percentage_units:
+        percent_formatter = mtick.PercentFormatter(xmax=100, decimals=0)
+        plt.gca().yaxis.set_major_formatter(percent_formatter)
+
 
     plt.tight_layout()
     fig.subplots_adjust(top=0.95, bottom=0.28)
@@ -821,7 +827,7 @@ def plot_heatmap_demands(Qs: Dict[str, Matrix],
 
 
 def plot_top_od_flows_periods(model, period_feature, period_keys, reference_od, top_k=10, join_points = False,
-                              rotation_xticks = 0):
+                              rotation_xticks = 0, ampm_format = True):
     """
     Plot top od pairs according to the largest number of trips reported in historic OD matrix
     """
@@ -840,10 +846,11 @@ def plot_top_od_flows_periods(model, period_feature, period_keys, reference_od, 
         # label_period_feature = f"{label_period_feature_1}-{label_period_feature_2}"
         label_period_feature = label_period_feature_1
 
-        if label_period_feature > 12:
-            label_period_feature = str(label_period_feature - 12) + 'PM'
-        else:
-            label_period_feature = str(label_period_feature) + 'AM'
+        if ampm_format:
+            if label_period_feature > 12:
+                label_period_feature = str(label_period_feature - 12) + 'PM'
+            else:
+                label_period_feature = str(label_period_feature) + 'AM'
 
         q_df = pd.concat([q_df, pd.DataFrame(q_dict, index=[label_period_feature])])
 
@@ -885,7 +892,9 @@ def plot_top_od_flows_periods(model, period_feature, period_keys, reference_od, 
 
         g.axhline(total_trips_by_hour['total_trips'].values[0], label='estimated od', linestyle='solid')
 
-    g.axhline(q_df.sum(axis=0)[0], label='historic od', linestyle='dashed')
+    if reference_od is not None:
+        g.axhline(q_df.sum(axis=0)['reference_od'], label='reference od', linestyle='dashed')
+
     plt.ylabel('total trips', fontsize=12)
     plt.xticks(rotation=rotation_xticks)
     ax.legend()
