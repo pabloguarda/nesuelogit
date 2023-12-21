@@ -154,6 +154,8 @@ def data_curation(raw_data: pd.DataFrame):
                 = raw_data.loc[(raw_data['link_type'] == 'LWRLK') & (~raw_data[feature].isna()), feature].mean()
             raw_data.loc[(raw_data['link_type'] != 'LWRLK'), feature] = 0
 
+    raw_data['tt_sd'] = raw_data['tt_sd_adj']
+
     # raw_data.loc[(raw_data['link_type'] == 'LWRLK') & (raw_data['tt_avg'] == 0), 'tt_avg'] \
     #     = raw_data.loc[(raw_data['link_type'] == 'LWRLK') & (raw_data['tt_avg'] != 0), 'tt_avg'].mean()
 
@@ -170,10 +172,19 @@ def data_curation(raw_data: pd.DataFrame):
     # Curation of link flow data
     raw_data.loc[raw_data['counts'] <= 0, "counts"] = np.nan
 
-    # Observed counts as used as a measure of how congested are the links, thus, they are normalized by link capacity
+    raw_data['n_lanes'] = raw_data['lane']
+    raw_data['capacity'] = raw_data['k']*raw_data['n_lanes']
+
+    # Observed counts as used as a measure of how congested are the links, thus, they are normalized by link capacity.
+    # It is assumed that all links achieved their capacity at some point, which is reasonable as pems traffic counter
+    # are always measuring major roads.
+
     raw_data = pd.merge(raw_data,
                         raw_data.groupby('link_key')[['counts']].max().rename(columns={'counts': 'counts_max'}),
                         on='link_key')
-    raw_data['counts'] = raw_data['counts'] / raw_data['counts_max'] * raw_data['k']
+    raw_data['counts'] = raw_data['counts'] / raw_data['counts_max'] * raw_data['capacity']
+
+    # Create feature for the counts per lane
+    raw_data['counts_lane'] = raw_data['counts'] / raw_data['n_lanes']
 
     return raw_data
