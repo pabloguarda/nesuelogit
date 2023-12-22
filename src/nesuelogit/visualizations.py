@@ -19,6 +19,8 @@ import pandas as pd
 import numpy as np
 import geopandas as gpd
 import contextily as ctx
+import matplotlib.colors as colors
+from matplotlib.ticker import FormatStrFormatter
 # from pysal.viz.mapclassify import Natural_Breaks
 from shapely.geometry import Point, LineString
 
@@ -38,6 +40,41 @@ import time
 from typing import Union, Dict, List, Tuple
 from isuelogit.mytypes import Matrix
 
+def plot_hyperparameter_grid_results(df):
+
+    fig, ax = plt.subplots(subplot_kw={"projection": "3d"}, figsize=(12, 6))
+
+    x = np.log10(df[(df.component == 'traveltime')]['value'])
+    y = np.log10(df[(df.component == 'flow')]['value'])
+    z = df['lambda_equilibrium'].sort_values().unique()
+
+    c = df[['lambda_equilibrium', 'relative_gap']].sort_values(['lambda_equilibrium'])[
+        'relative_gap'].drop_duplicates().values
+
+    p = ax.scatter(x, y, z,
+                   c=c,
+                   # c =np.log10(hyperparameter_search_eq['loss_eq']),
+                   norm=colors.LogNorm(vmin=1e-2, vmax=6e-2),
+                   s=40, cmap='Blues_r')
+
+    cbar = plt.colorbar(p,
+                        # ticks=[1e-3,1e-4,1e-5,1e-6,1e-7],
+                        # ticks=np.linspace(start = 1e-6, stop = 1e-7,num = 5),
+                        cax=fig.add_axes([0.78, 0.28, 0.03, 0.38]))
+
+    ax.set_xlabel(r'$\log(\ell_t)$')
+    ax.set_ylabel(r'$\log(\ell_x)$')
+    ax.set_zlabel(r'$\lambda_{e}$')
+
+    ax.xaxis.set_major_formatter(FormatStrFormatter('%.2f'))
+    ax.yaxis.set_major_formatter(FormatStrFormatter('%.2f'))
+
+    ax.view_init(elev=10., azim=-20, roll=0)
+    # ax.view_init(elev=10., azim=-25, roll=0)
+
+    plt.tight_layout()
+
+    return fig, ax
 
 def plot_metrics_kfold(df, metric_name = 'mape', benchmark_name = 'historical mean', model_name = 'model',
                        sharex=True, sharey=True, **kwargs):
@@ -723,9 +760,9 @@ def plot_performance_functions(model, network, flow_range = None, marginal=False
 
 
     sns.lineplot(data=plot_data, x='flow', y='traveltime_' + str(type_pf), hue='link', ax=axs[0], **kwargs)
-    axs[0].set_title(type_pf)
+    axs[0].set_title(type_pf, pad=20)
     sns.lineplot(data=plot_data, x='flow', y='traveltime_exogenous_bpr', hue='link', ax=axs[1], **kwargs)
-    axs[1].set_title(f'exogenous bpr (alpha = {round(float(np.mean(alpha)),2)}, beta = {round(float(np.mean(beta)),2)})')
+    axs[1].set_title(f'exogenous bpr (alpha = {round(float(np.mean(alpha)),2)}, beta = {round(float(np.mean(beta)),2)})', pad=20)
 
     for ax in axs:
         ax.set_ylabel('travel time')
