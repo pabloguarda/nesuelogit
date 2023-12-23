@@ -42,37 +42,57 @@ from isuelogit.mytypes import Matrix
 
 def plot_hyperparameter_grid_results(df):
 
-    fig, ax = plt.subplots(subplot_kw={"projection": "3d"}, figsize=(12, 6))
+    fig, ax = plt.subplots(subplot_kw={"projection": "3d"}, figsize=(16, 8))
 
-    x = np.log10(df[(df.component == 'traveltime')]['value'])
-    y = np.log10(df[(df.component == 'flow')]['value'])
-    z = df['lambda_equilibrium'].sort_values().unique()
+    df = df.sort_values('lambda_equilibrium')
+    original_lambda_equilibrium = df['lambda_equilibrium'].unique()
+    original_lambda_equilibrium = np.array([f'{x:.6f}'.rstrip('0').rstrip('.') if '.' in f'{x:.6f}' else str(int(x))
+              for x in original_lambda_equilibrium])
+
+    # Add a very small constant to show case when lambda is equal to zero
+    df['lambda_equilibrium'][df['lambda_equilibrium']==0] += 1e-9
+
+    x = np.log10(df[(df.component == 'traveltime')]['value'].values)
+    y = np.log10(df[(df.component == 'flow')]['value'].values)
+    z = np.log10(df['lambda_equilibrium'].unique())
 
     c = df[['lambda_equilibrium', 'relative_gap']].sort_values(['lambda_equilibrium'])[
         'relative_gap'].drop_duplicates().values
 
     p = ax.scatter(x, y, z,
                    c=c,
-                   # c =np.log10(hyperparameter_search_eq['loss_eq']),
-                   norm=colors.LogNorm(vmin=1e-2, vmax=6e-2),
-                   s=40, cmap='Blues_r')
+                   norm=colors.LogNorm(vmin=1e-2, vmax=5),
 
+                   s=40,
+                   # cmap='RdBu_r',
+                   # cmap='PRGn_r'
+                   cmap='Greens_r'
+                   )
     cbar = plt.colorbar(p,
-                        # ticks=[1e-3,1e-4,1e-5,1e-6,1e-7],
-                        # ticks=np.linspace(start = 1e-6, stop = 1e-7,num = 5),
-                        cax=fig.add_axes([0.78, 0.28, 0.03, 0.38]))
+                 # ticks=[1e-3,1e-4,1e-5,1e-6,1e-7],
+                 # ticks=np.linspace(start = 1e-6, stop = 1e-7,num = 5),
+                 cax=fig.add_axes([0.72, 0.28, 0.03, 0.38]))
+    cbar.set_label(f'relative gap', rotation=270, labelpad=15)
+
+    # for i, txt in enumerate(z):
+    #     ax.annotate(txt, (x[i], y[i], z[i]))
+    for i in range(len(x)):
+        ax.text(x[i], y[i], z[i], f'{original_lambda_equilibrium[i]}', size=10, zorder=1, color='k')
 
     ax.set_xlabel(r'$\log(\ell_t)$')
     ax.set_ylabel(r'$\log(\ell_x)$')
-    ax.set_zlabel(r'$\lambda_{e}$')
+    ax.set_zlabel(r'$\log(\lambda_{e})$', labelpad=0)
 
     ax.xaxis.set_major_formatter(FormatStrFormatter('%.2f'))
     ax.yaxis.set_major_formatter(FormatStrFormatter('%.2f'))
 
+    ax.xaxis.set_major_locator(MaxNLocator(5))
+    ax.yaxis.set_major_locator(MaxNLocator(5))
+
     ax.view_init(elev=10., azim=-20, roll=0)
     # ax.view_init(elev=10., azim=-25, roll=0)
 
-    plt.tight_layout()
+    # plt.tight_layout()
 
     return fig, ax
 
@@ -131,7 +151,7 @@ def plot_metrics_kfold(df, metric_name = 'mape', benchmark_name = 'historical me
     ax.set_title('validation set')
     ax.set_ylabel(metric_name)
     ax.set_xlabel('loss component')
-    legend = ax.legend(loc='upper right', title='model', bbox_to_anchor=(1.7, 0.6))
+    legend = ax.legend(loc='upper right', title='model', bbox_to_anchor=(1.65, 0.6))
     # ax.legend(title=None, loc='upper right')
     # legend._legend_box.align = "left"
 
@@ -159,7 +179,7 @@ def plot_baselines_kfold(df, metric_name='mape', sharex=True, sharey=True, **kwa
 
     sns.set_style("whitegrid")
 
-    fig, ax = plt.subplots(1, 1, tight_layout=True, figsize=(10, 7), sharex=sharex, sharey=sharey)
+    fig, ax = plt.subplots(1, 1, tight_layout=True, figsize=(5, 5), sharex=sharex, sharey=sharey)
 
     df = df.copy()
 
@@ -175,7 +195,7 @@ def plot_baselines_kfold(df, metric_name='mape', sharex=True, sharey=True, **kwa
     ax.get_xaxis().get_label().set_visible(True)
     ax.xaxis.set_tick_params(which='both', labelbottom=True)
 
-    ax.legend(loc='upper right', bbox_to_anchor=(1.3, 0.6))
+    # ax.legend(loc='upper right', bbox_to_anchor=(1.5, 0.6))
 
     sns.set_style("ticks")
 
@@ -299,10 +319,12 @@ def plot_predictive_performance(train_losses: pd.DataFrame,
                                 **kwargs):
     # fig, ax = plt.subplots(figsize = (5,4))
 
-    if show_equilibrium_stage_line or show_validation:
+    if show_equilibrium_stage_line:
+        fig, ax = plt.subplots(figsize=(5.5, 5), tight_layout=True)
+    elif show_validation:
         fig, ax = plt.subplots(figsize=(5.5, 5), tight_layout=True)
     else:
-        fig, ax = plt.subplots(figsize=(5, 4))
+        fig, ax = plt.subplots(figsize=(5.5, 5))
 
     if curves is None:
         curves = ['travel time', 'link flow', 'equilibrium']
@@ -379,7 +401,7 @@ def plot_predictive_performance(train_losses: pd.DataFrame,
             legend1 = plt.legend(handles=handles, loc='upper center',
                                  ncol=3,
                                  # , prop={'size': self.fontsize}
-                                 bbox_to_anchor=[0.52, -0.15],
+                                 bbox_to_anchor=[0.55, -0.15],
                                  bbox_transform=BlendedGenericTransform(fig.transFigure, ax.transAxes),
                                  prop={'size': legend_size}
                                  )
@@ -388,14 +410,14 @@ def plot_predictive_performance(train_losses: pd.DataFrame,
             legend1 = plt.legend(handles=handles, loc='upper center',
                                  ncol=2,
                                  # , prop={'size': self.fontsize}
-                                 bbox_to_anchor=[0.52, -0.15],
+                                 bbox_to_anchor=[0.55, -0.15],
                                  bbox_transform=BlendedGenericTransform(fig.transFigure, ax.transAxes),
                                  prop={'size': legend_size})
 
         ax.add_artist(legend1)
 
         legend2 = plt.legend(handles=patches, loc='upper center', ncol=len(patches),   # , prop={'size': self.fontsize}
-                             bbox_to_anchor=[0.52, -0.26],
+                             bbox_to_anchor=[0.55, -0.26],
                              bbox_transform=BlendedGenericTransform(fig.transFigure, ax.transAxes),
                              prop={'size': legend_size}
                              )
@@ -404,6 +426,8 @@ def plot_predictive_performance(train_losses: pd.DataFrame,
         # legend2 = plt.legend(handles=[train_patch, val_patch], handleheight=1e-2, loc='upper center', ncol=2#, prop={'size': self.fontsize}
         #            , bbox_to_anchor=[0.52, -0.4]
         #            , bbox_transform=BlendedGenericTransform(fig.transFigure, ax.transAxes))
+
+        fig.subplots_adjust(top=0.95, bottom=0.28)
 
     elif show_validation:
 
@@ -419,7 +443,7 @@ def plot_predictive_performance(train_losses: pd.DataFrame,
             legend1 = plt.legend(handles=handles, loc='upper center',
                                  ncol=2,
                                  # , prop={'size': self.fontsize}
-                                 bbox_to_anchor=[0.52, -0.15],
+                                 bbox_to_anchor=[0.55, -0.15],
                                  bbox_transform=BlendedGenericTransform(fig.transFigure, ax.transAxes),
                                  prop={'size': legend_size}
                                  )
@@ -428,14 +452,14 @@ def plot_predictive_performance(train_losses: pd.DataFrame,
             legend1 = plt.legend(handles=handles, loc='upper center',
                                  ncol=1,
                                  # , prop={'size': self.fontsize}
-                                 bbox_to_anchor=[0.52, -0.15],
+                                 bbox_to_anchor=[0.55, -0.15],
                                  bbox_transform=BlendedGenericTransform(fig.transFigure, ax.transAxes),
                                  prop={'size': legend_size})
 
         ax.add_artist(legend1)
 
         legend2 = plt.legend(handles=patches, loc='upper center', ncol=len(patches),   # , prop={'size': self.fontsize}
-                             bbox_to_anchor=[0.52, -0.26],
+                             bbox_to_anchor=[0.55, -0.26],
                              bbox_transform=BlendedGenericTransform(fig.transFigure, ax.transAxes),
                              prop={'size': legend_size}
                              )
@@ -445,8 +469,11 @@ def plot_predictive_performance(train_losses: pd.DataFrame,
         #            , bbox_to_anchor=[0.52, -0.4]
         #            , bbox_transform=BlendedGenericTransform(fig.transFigure, ax.transAxes))
 
+        fig.subplots_adjust(top=0.95, bottom=0.28)
+
     else:
         plt.legend(loc="upper right", bbox_to_anchor=(1, 1), bbox_transform=ax.transAxes, prop={'size': 10})
+
 
     if show_percentage_units:
         percent_formatter = mtick.PercentFormatter(xmax=100, decimals=0)
@@ -454,7 +481,6 @@ def plot_predictive_performance(train_losses: pd.DataFrame,
 
 
     plt.tight_layout()
-    fig.subplots_adjust(top=0.95, bottom=0.28)
 
     return fig, ax
 
@@ -667,7 +693,7 @@ def plot_performance_functions(model, network, flow_range = None, marginal=False
     type_pf = model.performance_function.type
     flows_shape = model.flows.numpy()[1, None].shape
 
-    fig, axs = plt.subplots(1, 2, figsize=(9, 4), tight_layout=True, sharey = sharey)
+    fig, axs = plt.subplots(1, 2, figsize=(9, 4.5), tight_layout=True, sharey = sharey)
 
     links_selected = True
 
@@ -717,11 +743,14 @@ def plot_performance_functions(model, network, flow_range = None, marginal=False
                                                           marginal_increase_df['link'].sort_values().unique())
 
 
-        sns.lineplot(data=marginal_increase_df, x='flow', y='traveltime_' + str(type_pf), hue='link', ax=axs[0], **kwargs)
-        sns.lineplot(data=marginal_increase_df, x='flow', y='traveltime_exogenous_bpr', hue='link', ax=axs[1], **kwargs)
+        sns.lineplot(data=marginal_increase_df, x='flow', y='traveltime_' + str(type_pf), hue='link', ax=axs[0],
+                     **kwargs)
+        sns.lineplot(data=marginal_increase_df, x='flow', y='traveltime_exogenous_bpr', hue='link', ax=axs[1],
+                     **kwargs)
 
-        axs[0].set_title(type_pf)
-        axs[1].set_title(f'exogenous bpr (alpha = {round(float(np.mean(alpha)),2)}, beta = {round(float(np.mean(beta)),2)})')
+        axs[0].set_title(type_pf, pad=20)
+        axs[1].set_title(
+            f'exogenous bpr (alpha = {round(float(np.mean(alpha)),2)}, beta = {round(float(np.mean(beta)),2)})', pad=20)
 
         for ax in axs:
             ax.set_ylabel('travel time')
@@ -762,7 +791,8 @@ def plot_performance_functions(model, network, flow_range = None, marginal=False
     sns.lineplot(data=plot_data, x='flow', y='traveltime_' + str(type_pf), hue='link', ax=axs[0], **kwargs)
     axs[0].set_title(type_pf, pad=20)
     sns.lineplot(data=plot_data, x='flow', y='traveltime_exogenous_bpr', hue='link', ax=axs[1], **kwargs)
-    axs[1].set_title(f'exogenous bpr (alpha = {round(float(np.mean(alpha)),2)}, beta = {round(float(np.mean(beta)),2)})', pad=20)
+    axs[1].set_title(
+        f'exogenous bpr (alpha = {round(float(np.mean(alpha)),2)}, beta = {round(float(np.mean(beta)),2)})', pad=20)
 
     for ax in axs:
         ax.set_ylabel('travel time')
@@ -808,6 +838,8 @@ def plot_convergence_estimates(estimates: pd.DataFrame,
                 estimates['epoch'].max() + (xticks_spacing * 0.2))
 
     plt.legend(prop={'size': 10})
+
+    plt.tight_layout()
 
     return fig, ax
 
@@ -917,7 +949,7 @@ def plot_top_od_flows_periods(model, period_feature, period_keys, reference_od, 
 
     total_trips_by_hour = total_trips_by_hour.reset_index().rename(columns={'index': period_feature, 0: 'total_trips'})
 
-    fig, ax = plt.subplots(1,1, figsize=(5, 4), tight_layout=True)
+    fig, ax = plt.subplots(1,1, figsize=(5.5, 5), tight_layout=True)
 
     if total_trips_by_hour.shape[0] > 1:
         g = sns.pointplot(data=total_trips_by_hour, x=period_feature, y='total_trips', ax=ax,
@@ -930,7 +962,7 @@ def plot_top_od_flows_periods(model, period_feature, period_keys, reference_od, 
         g.axhline(total_trips_by_hour['total_trips'].values[0], label='estimated od', linestyle='solid')
 
     if reference_od is not None:
-        g.axhline(q_df.sum(axis=0)['reference_od'], label='reference od', linestyle='dashed')
+        g.axhline(q_df.sum(axis=0)['reference_od'], label='reference OD', linestyle='dashed')
 
     plt.ylabel('total trips', fontsize=12)
     plt.xticks(rotation=rotation_xticks)
@@ -986,7 +1018,7 @@ def plot_rr_by_period_models(models, period_keys, period_feature='hour', rotatio
 
     # rr_by_hour_models['model'] = pd.Categorical(rr_by_hour_models['model'], ['lue', 'odlue', 'odlulpe', 'tvodlulpe'])
 
-    fig, ax = plt.subplots(figsize=(5, 4), tight_layout = True)
+    fig, ax = plt.subplots(figsize=(5.5, 5), tight_layout = True)
 
     sns.pointplot(data=rr_by_hour_models, x=period_feature + '_id', y="rr", ax=ax,
                   hue='model',
@@ -1066,7 +1098,7 @@ def plot_total_trips_models(models, period_feature, period_keys, reference_od: n
         0].astype(str). \
         apply(lambda x: time.strftime("%l%p", time.strptime(x, "%H")))
 
-    fig, ax = plt.subplots(figsize=(5, 4), tight_layout = True)
+    fig, ax = plt.subplots(figsize=(5, 5), tight_layout = True)
 
     g = sns.pointplot(data= total_trips_by_hour_models, x=period_feature, y='total_trips', ax=ax,
                       hue='model',
@@ -1074,7 +1106,7 @@ def plot_total_trips_models(models, period_feature, period_keys, reference_od: n
                       **kwargs)
 
     if reference_od is not None:
-        g.axhline(np.sum(reference_od), linestyle='dashed', color='black', label='historic od')  #
+        g.axhline(np.sum(reference_od), linestyle='dashed', color='black', label='reference OD')  #
 
     plt.ylabel('total trips', fontsize=12)
 
@@ -1327,7 +1359,7 @@ def plot_relative_gap_by_period(model, period_keys):
     input_flow = model.input_flow
     output_flow = model.output_flow()
 
-    fig, ax = plt.subplots(nrows=1, ncols=1, figsize=(5.5, 5))
+    fig, ax = plt.subplots(nrows=1, ncols=1, figsize=(5, 5))
 
     relative_gaps = model.compute_relative_gap_by_period(input_flow=input_flow,
                                                          output_flow=output_flow)
