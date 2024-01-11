@@ -30,7 +30,7 @@ input/private
 
 /input/network-data/fresno/links/backup/
 /output/network-data/fresno/links/*
-
+/input/network-data/SiouxFalls/links/backup/
 /tests/output/
 
 # Other folders
@@ -191,3 +191,4 @@ cython_debug/
 
 
 
+examples/scripts/simulate-nesuelogit-data.py
