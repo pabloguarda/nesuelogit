@@ -26,9 +26,10 @@ sns.set_context('notebook')
 # from typing import Union, Dict, List, Tuple
 # from isuelogit.mytypes import Matrix
 from pesuelogit.models import compute_rr
-from nesuelogit.models import bpr_function, utility_parameters_periods, compute_baseline_predictions
+from nesuelogit.models import bpr_function, utility_parameters_periods, compute_baseline_predictions, \
+    compute_relative_gap_by_period
 from nesuelogit.etl import get_tensors_by_year
-from nesuelogit.metrics import r2_score
+from nesuelogit.metrics import r2_score, mse
 import time
 from typing import Union, Dict, List, Tuple
 from isuelogit.mytypes import Matrix
@@ -1018,6 +1019,26 @@ def plot_relative_gap_by_period(model, period_keys):
     plot_df['hour'] = plot_df.hour.astype(str).apply(lambda x: time.strftime("%l%p", time.strptime(x, "%H")))
     sns.pointplot(data=plot_df, x='hour', y='relative_gap', ax=ax)
     plt.ylabel('relative gap', fontsize=12)
+    plt.xticks(rotation=90)
+    ax.set_ylim(ymin=0)
+    plt.tight_layout()
+
+def plot_equilibrium_loss_by_period(model, period_keys):
+
+    input_flow = model.input_flow
+    output_flow = model.output_flow()
+
+    equilibrium_losses = \
+        [mse(actual=input_flow[i, :], predicted=output_flow[i, :]).numpy() for i in range(output_flow.shape[0])]
+
+    fig, ax = plt.subplots(nrows=1, ncols=1, figsize=(5, 5))
+
+    plot_df = pd.DataFrame({'equilibrium_loss': equilibrium_losses,
+                            'hour': pd.DataFrame({'period_id': model.period_ids[:, 0]})['period_id'].map(
+                                dict(zip(period_keys.period_id, period_keys.hour))).values})
+    plot_df['hour'] = plot_df.hour.astype(str).apply(lambda x: time.strftime("%l%p", time.strptime(x, "%H")))
+    sns.pointplot(data=plot_df, x='hour', y='equilibrium_loss', ax=ax)
+    plt.ylabel('equilibrium loss', fontsize=12)
     plt.xticks(rotation=90)
     ax.set_ylim(ymin=0)
     plt.tight_layout()
