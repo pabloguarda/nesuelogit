@@ -97,6 +97,19 @@ def utility_parameters_periods(model, period_feature, period_keys, include_vot=F
     theta_df[cols] = theta_df[cols].apply(pd.to_numeric, errors='coerce')
     return theta_df
 
+def compute_relative_gap_by_period(input_flow, output_flow):
+    normalizer = 1
+    if input_flow.shape[0] < output_flow.shape[0]:
+        normalizer = int(output_flow.shape[0] / input_flow.shape[0])
+    relative_gaps = []
+    for i in range(output_flow.shape[0]):
+        # We now use the definition of relative residual
+        relative_gap = (
+                tf.norm(output_flow[i, :] - input_flow[i, :], 1) /
+                (normalizer * tf.norm(input_flow[i, :], 1))).numpy()
+        relative_gaps.append(relative_gap)
+    return relative_gaps
+
 class Parameters(pesuelogit.models.Parameters):
     def __init__(self, dtype, *args, **kwargs):
         # Cast to right daya type
@@ -1547,7 +1560,9 @@ class NESUELOGIT(PESUELOGIT):
         else:
             # Generation features
             initial_values['fixed_effect_generation'] = self.generation.initial_values['fixed_effect']
-            # initial_values['fixed_effect_generation'] = self.generation.reference_g.numpy()[self.generation.reference_g.numpy()!=0][np.newaxis,:]
+            # initial_values['fixed_effect_generation']
+            # = self.generation.reference_g.numpy()[self.generation.reference_g.numpy()!=0][np.newaxis,:]
+
             # Link specific effect (act as an intercept)
             self._fixed_effect_generation = tf.Variable(
                 initial_value=tf.cast(initial_values['fixed_effect_generation'], dtype=self.dtype),
@@ -1745,19 +1760,6 @@ class NESUELOGIT(PESUELOGIT):
         # self._filepath_weights = f'output/models/{self.key}_{self.network.key}.h5'
         # self.save_weights(self._filepath_weights)
 
-    def compute_relative_gap_by_period(self, input_flow, output_flow):
-        normalizer = 1
-        if input_flow.shape[0] < output_flow.shape[0]:
-            normalizer = int(output_flow.shape[0] / input_flow.shape[0])
-        relative_gaps = []
-        for i in range(output_flow.shape[0]):
-            # We now use the definition of relative residual
-            relative_gap = (
-                    tf.norm(output_flow[i, :] - input_flow[i, :], 1) /
-                    (normalizer * tf.norm(input_flow[i, :], 1))).numpy()
-            relative_gaps.append(relative_gap)
-        return relative_gaps
-
     def compute_relative_gap(self, input_link_flow = None, output_link_flow = None):
         if input_link_flow is None:
             input_link_flow = self.input_flow
@@ -1882,7 +1884,7 @@ class NESUELOGIT(PESUELOGIT):
                     = np.floor(tf.reduce_mean(tf.reduce_sum(tf.cast(~tf.math.is_nan(data), self.dtype), 1), 0))
                 coverages[group] \
                     = np.round((tf.reduce_sum(tf.reduce_sum(tf.cast(~tf.math.is_nan(data), self.dtype), 1), 0) /
-                                (tf.cast(tf.size(data), self.dtype) / 2)).numpy(), 2)
+                                (tf.cast(tf.size(data), self.dtype) / 2)).numpy(), 3)
         # relative_gaps = [float('nan')]
         relative_gaps = []
         convergence = False
@@ -2715,7 +2717,8 @@ def create_bpr(network, alpha_prior=1, beta_prior=1, dtype=tf.float32, max_trave
 def create_model_fresno(network, model_key='tvgodlulpe', dtype=tf.float32, n_periods=1, features_Z=None,
                         reference_g=None, reference_q=None, performance_function=None, utility_parameters=None,
                         od_parameters=None, generation_parameters=None, generation=True, od_trainable=False,
-                        utility_trainable=True, pretrain_generation_weights=True, generation_trainable=True):
+                        utility_trainable=True, pretrain_generation_weights=True, generation_trainable=True,
+                        kappa_trainable = True):
     if utility_parameters is None:
         utility_parameters = UtilityParameters(
             features_Y=['tt'], features_Z=features_Z,
@@ -2748,10 +2751,11 @@ def create_model_fresno(network, model_key='tvgodlulpe', dtype=tf.float32, n_per
             signs={'income': '+', 'population': '+', 'bus_stops': '-'},
             trainables={'fixed_effect': generation_trainable,
                         # 'income': False, 'population': False, 'bus_stops': False,
-                        'income': generation_trainable, 'population': generation_trainable,
-                        'bus_stops': generation_trainable,
+                        'income': kappa_trainable, 'population': kappa_trainable,
+                        'bus_stops':  kappa_trainable,
+                        # Class of fixed effect of destination-choice model
                         'fixed_effect_origin': False, 'fixed_effect_destination': False,
-                        'fixed_effect_od': generation_trainable,
+                        'fixed_effect_od': True,
                         },
             time_varying=True,
             reference_g=reference_g,
@@ -2926,6 +2930,7 @@ def create_tvgodlulpe_model_fresno(network, n_periods, reference_g, features_Z, 
         reference_q=reference_q,
         generation=True,
         generation_trainable=True,
+        kappa_trainable=False,
         utility_trainable=True,
         features_Z=features_Z,
         pretrain_generation_weights=True
