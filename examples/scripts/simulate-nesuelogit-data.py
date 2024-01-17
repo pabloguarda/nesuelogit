@@ -148,7 +148,7 @@ def create_tvodlulpe_model_siouxfalls(network, dtype=_DTYPE, n_periods=1, featur
     #     features_Z=['income', 'population'],
     #     initial_values={
     #         # 'income': 0,
-    #         'fixed_effect': historic_g,
+    #         'fixed_effect': reference_g,
     #     },
     #     keys=['fixed_effect_od', 'fixed_effect_origin', 'fixed_effect_destination'],
     #     # true_values={'income': 0, 'fixed_effect': np.zeros_like(network.links)},
@@ -159,7 +159,7 @@ def create_tvodlulpe_model_siouxfalls(network, dtype=_DTYPE, n_periods=1, featur
     #         # 'fixed_effect_origin': False, 'fixed_effect_destination': True, 'fixed_effect_od': False
     #     },
     #     pretrain_generation_weights=False,
-    #     historic_g=historic_g,
+    #     reference_g=reference_g,
     #     dtype=dtype
     # )
 
@@ -222,7 +222,7 @@ n_periods = len(np.unique(X[:, :, -1].numpy().flatten()))
 
 model, _ = create_tvodlulpe_model_siouxfalls(network=tntp_network,
                                              n_periods=n_periods,
-                                             # historic_g=generation_factors[:, np.newaxis] * generated_trips
+                                             # reference_g=generation_factors[:, np.newaxis] * generated_trips
                                              )
 
 # Data from period 2 is generated with OD matrix that is 0.8 times the true OD matrix
