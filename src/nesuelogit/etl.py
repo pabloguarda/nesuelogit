@@ -140,5 +140,5 @@ def data_curation(raw_data: pd.DataFrame):
     return raw_data
 
 def read_tntp_od(**kwargs):
-    config.dirs['output_folder'] = os.path.join(os.getcwd())
+    config.dirs['output_folder'] = os.path.join(os.getcwd(),'output/')
     return reader.read_tntp_od(**kwargs)
