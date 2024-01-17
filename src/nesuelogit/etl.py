@@ -1,12 +1,15 @@
 import pandas as pd
 from isuelogit.nodes import Node, NodePosition
 from isuelogit.links import Link
+from isuelogit import reader
+from isuelogit import config
 from pesuelogit.networks import TransportationNetwork
 from isuelogit.factory import NetworkGenerator
 from pesuelogit.etl import get_y_tensor, get_design_tensor
 import numpy as np
 from typing import Dict, List, Tuple
 import tensorflow as tf
+import os
 
 def build_network(nodes_df, links_df, crs, key=''):
     # # Read nodes data
@@ -135,3 +138,7 @@ def data_curation(raw_data: pd.DataFrame):
     # Create feature for the counts per lane
     raw_data['counts_lane'] = raw_data['counts'] / raw_data['n_lanes']
     return raw_data
+
+def read_tntp_od(**kwargs):
+    config.dirs['output_folder'] = os.path.join(os.getcwd())
+    return reader.read_tntp_od(**kwargs)
