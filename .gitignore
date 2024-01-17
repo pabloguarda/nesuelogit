@@ -13,6 +13,8 @@ input/private
 !output/models/kfold/
 !output/models/kfold/.gitkeep
 !output/models/.gitkeep
+!output/models/240112102936_fresno_tvgodlulpe.h5
+!output/models/240112102936_fresno_tvodlulpe.h5
 !output/figures/.gitkeep
 !output/notebooks/.gitkeep
 !/examples/scripts/.gitkeep
