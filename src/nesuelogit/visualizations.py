@@ -839,6 +839,7 @@ def plot_utility_parameters_periods(model, period_keys, period_feature, include_
 
 def plot_congestion_maps(model, model_df: pd.DataFrame, gdf: gpd.GeoDataFrame, features: List[str], benchmark_df,
                          cmap='viridis', benchmark_model=None):
+
     if benchmark_model is None:
         benchmark_model = 'regression_kriging'
     # Train benchmark model
@@ -848,7 +849,6 @@ def plot_congestion_maps(model, model_df: pd.DataFrame, gdf: gpd.GeoDataFrame, f
     # Provide centroids of links as geographical information to compute regression kriging.
     centroids = gdf.to_crs(2228).geometry.centroid.to_crs(4326)
     gdf['X'], gdf['Y'] = centroids.x, centroids.y
-    # TODO: decide if using spatial coordinates in lat lon or projected crs
     # Prediction travel time
     _, predictions_traveltime_baseline = compute_baseline_predictions(X_train=X_train[0].numpy()[:, :1],
                                                                       X_val=X_val[0].numpy()[:, :1],
@@ -867,6 +867,7 @@ def plot_congestion_maps(model, model_df: pd.DataFrame, gdf: gpd.GeoDataFrame, f
                                                                 coordinates_val=gdf[['X', 'Y']].values,
                                                                 models=[benchmark_model]
                                                                 )
+
     benchmark_df = benchmark_df[benchmark_df.year == 2020]. \
         assign(pred_traveltime_benchmark=list(predictions_traveltime_baseline.values())[0],
                pred_flow_benchmark=list(predictions_flow_baseline.values())[0])
@@ -1011,8 +1012,7 @@ def plot_relative_gap_by_period(model, period_keys):
     input_flow = model.input_flow
     output_flow = model.output_flow()
     fig, ax = plt.subplots(nrows=1, ncols=1, figsize=(5, 5))
-    relative_gaps = model.compute_relative_gap_by_period(input_flow=input_flow,
-                                                         output_flow=output_flow)
+    relative_gaps = compute_relative_gap_by_period(input_flow=input_flow, output_flow=output_flow)
     plot_df = pd.DataFrame({'relative_gap': relative_gaps,
                             'hour': pd.DataFrame({'period_id': model.period_ids[:, 0]})['period_id'].map(
                                 dict(zip(period_keys.period_id, period_keys.hour))).values})
